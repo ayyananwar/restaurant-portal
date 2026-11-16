@@ -1,0 +1,127 @@
+# Restaurant portal build and verification plan
+
+Use this file as the scope and release checklist. A phase stays open until its acceptance checks pass. Record each release candidate's version, device matrix, test run, findings, and retests in the verification log. Add a regression check when fixing behavior that could break again.
+
+## Codebase hygiene for every change
+
+Use this checklist before starting a change and again before marking it complete.
+
+- [ ] **Find the existing owner.** Search for the feature, related files, and their callers. Extend the existing component, service, test, or document when it fits. Add a file only when it has a distinct responsibility, and put it with related files.
+- [ ] **Keep one source of truth.** Reuse shared types, validation, UI components, and business rules where the behavior is the same. When replacing a file or implementation, update its callers and remove the superseded copy once references are checked. Keep test fixtures and generated output in their designated locations.
+- [ ] **Keep the change focused.** Preserve existing behavior and stored data unless the feature explicitly changes them. Check callers, migrations, and compatibility before moving, renaming, or deleting code. Keep unrelated edits out of the change.
+- [ ] **Review the final file list and changes.** Remove unused imports, helpers, dependencies, debug output, commented-out experiments, and temporary files introduced by the work. Update the existing documentation and tests alongside the feature.
+- [ ] **Verify through the normal workflow.** Follow the feature testing and physical handoff requirements below.
+
+## Feature testing and physical handoff
+
+- **Before implementation**, define what success looks like through the normal entry point. Identify the affected roles, screens, stored data, and other workflows that rely on the change.
+- **After implementing each feature or fix**, run the applicable type checks and automated tests and exercise the affected workflow locally. Check the normal path and the relevant failure, permission, retry, or synchronization paths. Reuse existing tests and add coverage where a new behavior or regression would otherwise go untested.
+- **Before reporting a feature as complete**, fix failures and rerun the affected checks. Record the build tested, commands or steps, outcomes, and any pending checks in [VERIFICATION.md](VERIFICATION.md). Run `npm.cmd run test:all` before release.
+- **When a check needs physical access**, complete the checks available locally first. Leave the physical check pending until the result is recorded. Send the tester a self-contained handoff with the following details.
+
+| Handoff item | What to include |
+| --- | --- |
+| Setup and access | Exact build or installer, devices and network needed, startup instructions, and the exact address to open on each device. For phone tests, verify the staff-network HTTPS address before sending it. |
+| Sample accounts and data | The username and role for each screen, where to find or generate the matching test password, and the exact sample records or values to enter. Use a separate test database and share sample credentials through a local file or another private channel. Keep production credentials and test passwords out of tracked docs and logs. |
+| Steps and pass criteria | Numbered instructions from sign-in through the final check, with exact buttons or fields and the expected result on each affected screen. Include how to disconnect and restore the network or reset test data when relevant. |
+| What to report | Ask for pass or fail, the first step that differed, device and browser details, and the visible error or a screenshot with private information removed. Record the result and retest any fix. |
+
+## UI resources and design reviews
+
+Use [DESIGN.md](DESIGN.md) for all staff screens and guest themes. Read the relevant component and breakpoint rules before implementation. Update the specification and runtime tokens together when a design decision changes. Review phone and PC states against the specification before closing a UI change.
+
+Use [shadcn/ui](https://ui.shadcn.com/) as the first place to look for reusable interface components. Bring in the individual components each workflow needs, such as dialogs, sheets, form fields, and tables, and adapt them to shared project tokens. Use native controls where they already fit. Check license, maintenance, keyboard support, bundle impact, and offline operation before adding a library. Bundle staff UI dependencies, icons, and any fonts locally. Prefer a single licensed icon set, with text labels on important actions. Use outlet-supplied photos or licensed assets for the public site and record attribution where required.
+
+Staff screens should feel like service tools. Show table number, waiter, preparation state, or total where it drives the next action. Make the primary action easy to hit with one hand, put status in text as well as color, and retain drafts on recoverable errors. Favor clear type, compact lists, and obvious focus. The guest themes can express the restaurant's identity through type, photography, and color. Avoid decorative gradients, repeated card shells, generic promotional copy, and animation that slows service.
+
+| When | Skills to apply | Evidence to record |
+| --- | --- | --- |
+| Before the first UI redesign or a new theme | Owl Listener's `design-token` for shared type, spacing, and semantic colors. `shadcn` to check the official registry before creating a primitive. | Write down the proposed tokens, component choices, and which screens share them. |
+| Before implementing waiter, kitchen, or billing changes | `error-handling-ux` for lost connections, unavailable dishes, repeated actions, and recovery. Use `better-icons` when selecting icons, then bundle the approved set. | Define normal, loading, empty, failed, and retry states. Include the visible action and how an interrupted order is recovered. |
+| After each React UI or data-fetching change | `vercel-react-best-practices` to review rendering, requests, and bundle cost. Run the matching workflow tests after fixes. | Record tests for the roles affected and verify that displayed data agrees across those screens. |
+| Before and after each public theme | `design-taste-frontend` to define an outlet-specific visual direction, then review the rendered page for readable hierarchy, authentic imagery, and clear menu navigation. Use its art direction on the guest site. | Save screenshots at phone and desktop widths. Verify the same menu, pricing, and availability under both themes. |
+| After each user-facing milestone | `impeccable` for hierarchy, density, typography, and polish. `web-design-guidelines` for keyboard use, labels, contrast, and responsive behavior. Owl Listener's `design-qa-checklist` for the browser walkthrough. | Test at phone and counter widths with realistic data. Check focus order, touch targets, text wrapping, reduced motion, connection loss, and recovery. Log findings and rerun the affected tests. |
+| Before release | Repeat the design and accessibility reviews on the release candidate, run `npm.cmd run test:all`, and complete the real-device checks below. | Add the build version, role and device matrix, findings, and retest outcomes to the verification record. |
+
+These skills guide development and review. The installed restaurant software runs independently of the skills, design tools, and their network services.
+
+### UI review checklist
+
+- Compare rendered screens with the supplied reference and [design system](DESIGN.md). Check hierarchy, spacing, type, photo crops, and control states. Remove filler copy, unsupported badges, repeated wrappers, and controls without a working action.
+- Check phone and desktop widths with the same sample data. Look for clipped labels, unexpected horizontal scrolling, missing images, and inconsistent prices, status, or counts. Include a long label, an empty state, and a failed request where applicable.
+- Walk the changed flow with keyboard and pointer. Check visible focus, touch targets, readable labels, and recovery after errors. Run the relevant browser tests and review their accessibility results.
+- Record the screens, widths, screenshots, findings, and retests in [VERIFICATION.md](VERIFICATION.md). Treat a clean source scan as one input to the review and verify the rendered workflow separately.
+
+The selected skills were installed from reviewed revisions of [Better Icons](https://github.com/better-auth/better-icons/tree/033316ecb8f4982235af4111a2257e80231f5ab1), [Taste Skill](https://github.com/Leonxlnx/taste-skill/tree/f6b76575f949707b4e3c37cd86cb44b0b98643e8), [Vercel Agent Skills](https://github.com/vercel-labs/agent-skills/tree/1a2c79d4e6c4a2283dc2c614b6538cbe1ed5ca62), [Designer Skills](https://github.com/Owl-Listener/designer-skills/tree/9a6930cf84a822eb458624bd11c61aac5bbdf224), [Impeccable](https://github.com/pbakaus/impeccable/tree/ec229b48547f24685ffb22aa51c462c5ae27908c), and [shadcn/ui](https://github.com/shadcn-ui/ui/tree/8ab27715521cbd4f87ae6886cd989cbb678f6de7). The linked [SuperDesign project](https://github.com/superdesigndev/superdesign) is a separate IDE extension. Browser review of the running app covers the preview workflow for this project.
+
+## Phase 1 · Offline ordering
+
+- [x] Create a local Windows-hosted app with separate admin, waiter, kitchen, and counter access using a sample outlet.
+- [x] Build table ownership, dishes and notes, per-dish preparation status, and a counter check.
+- [x] Store order submissions and ownership together. Test retries, simultaneous claims, and price snapshots.
+- [x] Apply shared tokens and selected shadcn/ui controls to the existing staff screens. Review all four roles and rerun the local workflow tests. See [staff UI verification](VERIFICATION.md#staff-ui-update).
+- [x] Apply the target staff palette and adaptive waiter layout from [DESIGN.md](DESIGN.md). Keep staff status semantics consistent across all four roles.
+- [x] Replace the native dish selector with the [waiter dish picker](DESIGN.md#waiter-dish-picker). Add local search, menu categories, one-action adds, and a shared draft that displays as a review pane on phones and alongside the catalog on PCs. Preserve existing sample and outlet menu data when introducing categories.
+- [ ] Complete the [dish-picker acceptance checks](DESIGN.md#acceptance-checks-for-the-first-dish-picker-implementation). See the [verification log](VERIFICATION.md#dish-picker-and-table-placement) for local results. Physical phones, on-screen keyboard behavior, and the real-device search timing target still need verification.
+- [ ] Provision a stable outlet hostname and trusted HTTPS. Restrict Windows Firewall to the staff network and verify the guest network cannot reach the service.
+- [ ] On a Windows counter and two real phones, sign in with WAN disconnected, take an order, mark dishes ready, and check the total. Restart Windows and verify the data.
+
+## Phase 2 · Service and billing
+
+- [x] Add moves to an available table and transfers to an enabled waiter. Keep the existing order and dish status, record who changed the assignment, and reject stale or unauthorized changes.
+- [x] Implement and verify sent-order changes locally. The assigned waiter can add dishes to the same check and change quantities, notes, or cancel dishes that are queued. The default policy requires counter approval once preparation starts. Changes and decisions are recorded, and the check total reflects approved changes. See [order change verification](VERIFICATION.md#sent-order-changes).
+- [ ] Add outlet-level configuration for changes after preparation starts. Confirm the allowed policies before exposing them to admins. Handle corrections to ready dishes in the billing and correction workflow.
+- [x] Add counter-led table joins and item-quantity splits for two to eight checks. Preserve kitchen states, reconcile the original total, and audit saves and reopens. Verify that stale orders and duplicate retries cannot change the result. See [verification](VERIFICATION.md#table-joins-and-split-checks).
+- [x] Implement and verify local counter handoff with external receipt references and payment outcomes for whole and split checks. The assigned waiter can release a paid table once the kitchen finishes, or release an order with all dishes cancelled. See [receipt handoff verification](VERIFICATION.md#receipt-handoff-and-table-release).
+- [x] Add counter paper-order entry for live and already-served orders. Credit the selected waiter without reassigning an occupied table. Queue only live entries for the kitchen and keep submission retries duplicate-safe. See [paper-order verification](VERIFICATION.md#paper-order-entry).
+- [x] Report waiter activity by day, week, and month in the admin view. Count distinct orders per waiter and show entry counts separately. Preserve attribution through moves, transfers, and joins, and count paper entries for the credited waiter on the recording date. See [waiter activity verification](VERIFICATION.md#waiter-activity).
+- [ ] Confirm unpaid table release before implementing it. Test no mixing of successive parties, balance reconciliation, rounding, duplicate receipt references, and corrections.
+- [ ] Verify printing, manual sharing, and offline receipt capability with the selected outlet's actual billing product. The external product issues the official bill.
+- [x] Review move, transfer, split, and paper-entry screens for safe confirmation, clear totals, and recoverable errors. See [counter workflow UI review](VERIFICATION.md#counter-workflow-ui-review).
+
+## Phase 3 · Public website and synchronization
+
+- [x] Add local admin editing for dish name, category, price, and description. Add kitchen availability controls with an optional return estimate and manual confirmation. Keep waiter ordering in sync and preserve prices on existing checks. See [catalog verification](VERIFICATION.md#menu-catalog-and-availability).
+- [x] Add local dish photo upload, replacement, and removal. Verify the Classic and Photo-led guest previews. See [verification](VERIFICATION.md#dish-photos-and-guest-menu-previews).
+- [x] Persist a local menu publication queue and send versioned guest-only snapshots and photos over HTTPS with an installation credential. Retry failures and preserve pending edits across restart. Record the last acknowledged publication for admins. See [verification](VERIFICATION.md#local-menu-publication).
+- [x] Add a separate hosted Fastify service with PostgreSQL for menus and photos. Reuse the guest Vite build to keep both themes in one renderer. Scope credentials, menu versions, and photo access to an outlet. Show the last successful update to guests and publication status in the local admin catalog.
+- [x] Verify the receiver against local PostgreSQL and HTTPS. Cover stale versions, conflicting repeats, lost acknowledgments, concurrent writes, photo references, long menus, and outlet isolation. See [verification](VERIFICATION.md#hosted-guest-menu-and-receiver).
+- [x] Require verified TLS for remote PostgreSQL and verify the staging checker and receiver outage recovery locally. See [verification](VERIFICATION.md#internet-staging-readiness).
+- [x] Verify admin printing for individual and all-table QR cards, with a distinct code for each table and a shared public outlet menu destination. See [verification](VERIFICATION.md#printable-table-qr-cards).
+- [x] Add full-catalog menu image export for sharing, with a paginated preview, individual PNGs, and a complete ZIP download. See [verification](VERIFICATION.md#menu-image-export).
+- [x] Apply the [guest theme rules](DESIGN.md#guest-themes) and review both themes with the same catalog at phone and desktop widths. See [guest UI review](VERIFICATION.md#guest-ui-review-and-accessibility).
+
+## Phase 4 · Offers and private feedback
+
+- [x] Verify local admin and counter workflows for shared dine-in coupon codes with fixed rupee discounts, optional minimum spend, optional expiry, and one coupon per check. Store the discount alongside the receipt and use the restaurant billing software for the official total. See [verification](VERIFICATION.md#dine-in-coupons).
+- [x] Add public dine-in offers, one claim per verified phone account per offer, and one-use counter redemption after sync. Verify local and hosted reconciliation. See [verification](VERIFICATION.md#public-offers-and-phone-linked-claims).
+- [x] Verify guest phone sign-in, local rate limits, and secure guest sessions with simulated SMS delivery. See [verification](VERIFICATION.md#guest-phone-sign-in).
+- [x] Add single-use review codes for paid receipts, a printable slip, private guest submission, and an owner inbox. Verify expiry, replay, abuse limits, offline sync, and outlet isolation locally. See [verification](VERIFICATION.md#private-receipt-feedback).
+- [x] Verify private claim access, duplicate claim requests, and offline counter redemption. Keep real network and SMS checks in the release phase.
+- [x] Review rendered guest sign-in, offer claims, and private feedback. Verify labels, invalid verification codes, recovery, confirmation, and feedback privacy with the hosted test fixture. See [guest UI review](VERIFICATION.md#guest-ui-review-and-accessibility).
+
+## Phase 5 · Release candidate
+
+- [x] Apply the supplied staff UI references and verify the desktop and phone-sized browser workflows. Record adaptations for live data and staff permissions. See [staff redesign verification](VERIFICATION.md#staff-reference-redesign).
+- [x] Keep every admin workspace in the outlet overview layout. Verify active navigation, focus, edit protection, and phone-width controls across all six sections. See [admin UI verification](VERIFICATION.md#admin-navigation-and-mobile-review).
+- [ ] Repeat the admin walkthrough on a physical phone connected to the outlet's trusted staff network. Use the [admin test steps](VERIFICATION.md#physical-admin-walkthrough).
+- [x] Build a versioned Windows x64 installer kit with a bundled runtime and boot-task configuration. Verify clean installation, process restart, update, damaged-update rejection, and compatible rollback with sample data. See [verification](VERIFICATION.md#windows-installer-kit).
+- [ ] Run the [Windows boot check](README.md#windows-installer-kit) on a clean counter PC or VM. Verify actual task registration, permissions, and startup after reboot. Test disk exhaustion and interruptions during database writes.
+- [ ] Run a full simulated dinner with real phones and the outlet's billing workflow. Test simultaneous requests, weak Wi-Fi, a WAN outage, and reconnection. Record the device and browser matrix and observed performance.
+- [ ] Run all automated tests, dependency and secret scans, and the staged security checks below. Fix confirmed findings and retest them. Require zero open known in-scope defects and zero unresolved confirmed security findings.
+- [ ] Document deployment, manual receipt handoff, paper fallback, incident ownership, and the first release's lack of backup and restore. Local drive failure can lose historical records.
+- [ ] After software development and local verification, provision internet staging with a publicly trusted certificate. Run the [staging checks](README.md#verify-internet-staging), including a real restaurant-network interruption and catch-up after reconnection.
+- [ ] Verify SMS delivery and phone sign-in with the configured provider on Indian mobile numbers, including a delayed message and one failed or expired code.
+- [ ] Scan printed QR cards from real phones on a guest network and verify each card opens the correct hosted outlet menu.
+- [ ] Deploy the tested build and verify an order and a public menu update at the outlet.
+
+## Security verification
+
+| Boundary | Controls and checks |
+| --- | --- |
+| Staff app | Unique accounts, salted password hashing, expiring sessions, rate limits, secure cookies over TLS, same-origin writes, and server-enforced roles. Exercise direct endpoint access, logout, malformed requests, and unauthorized table changes. |
+| Network and installer | Use trusted HTTPS for staff phones, restrict ingress to the staff network, and use outbound HTTPS for sync. Verify guest Wi-Fi separation, firewall rules, certificate renewal, bundled runtime, and least-privilege service access. |
+| Hosted data | Test cross-outlet access to every protected resource. Scope and rotate installation credentials. Validate inputs and uploads, limit abuse, keep secrets and customer data out of logs, and minimize what syncs. |
+| Release | Verify dependency and build integrity, review access control and failure cases, and run targeted staged security testing against applicable [OWASP ASVS requirements](https://owasp.org/www-project-application-security-verification-standard/). |
+
+Later scope includes online pickup and delivery, integrated payments, delivery booking, multi-outlet operations, and the farmer marketplace.

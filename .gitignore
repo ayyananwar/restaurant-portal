@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.npm-cache/
+data/
+*.sqlite*
+.env*
+*.pem
+*.key
