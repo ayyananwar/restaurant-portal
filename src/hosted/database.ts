@@ -5,6 +5,10 @@ import type { GuestMenuItem, GuestMenuTheme } from '../shared/contracts.js';
 export const outletSlugPattern = '^[a-z0-9][a-z0-9-]{0,62}$';
 export const photoKeyPattern = '^[a-f0-9]{64}$';
 const photoQuota = 256 * 1024 * 1024;
+export const installationPattern = '^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$';
+export type PublicationLease = { installation?: string; tokenHash?: Buffer };
+
+const publicationConflict = () => Object.assign(new Error('The publishing installation has changed.'), { statusCode: 409 });
 
 export function hostedPool(connectionString: string, options?: string) {
   const url = URL.parse(connectionString);
@@ -99,16 +103,19 @@ export async function prepareHostedStore(pool: Pool) {
     );
     CREATE INDEX IF NOT EXISTS outlet_offer_pending ON outlet_offer_claims (outlet, claimed_at, code) WHERE NOT ready;
     CREATE INDEX IF NOT EXISTS outlet_offer_account ON outlet_offer_claims (outlet, account_id, claimed_at DESC);
+    ALTER TABLE hosted_outlets ADD COLUMN IF NOT EXISTS publication_installation UUID;
   `);
 }
 
-export async function stageFeedbackCodes(pool: Pool, slug: string, codes: { digest: string; expiresAt: number }[]) {
-  await pool.query(`
-    INSERT INTO receipt_feedback (outlet, digest, expires_at)
-    SELECT $1, x.digest, to_timestamp(x."expiresAt" / 1000.0)
-    FROM jsonb_to_recordset($2::jsonb) AS x(digest TEXT, "expiresAt" BIGINT)
-    ON CONFLICT (outlet, digest) DO NOTHING
-  `, [slug, JSON.stringify(codes)]);
+export async function stageFeedbackCodes(pool: Pool, slug: string, codes: { digest: string; expiresAt: number }[], lease: PublicationLease = {}) {
+  await outletWrite(pool, slug, async client => {
+    await client.query(`
+      INSERT INTO receipt_feedback (outlet, digest, expires_at)
+      SELECT $1, x.digest, to_timestamp(x."expiresAt" / 1000.0)
+      FROM jsonb_to_recordset($2::jsonb) AS x(digest TEXT, "expiresAt" BIGINT)
+      ON CONFLICT (outlet, digest) DO NOTHING
+    `, [slug, JSON.stringify(codes)]);
+  }, lease);
 }
 
 export async function outletFeedback(pool: Pool, slug: string) {
@@ -121,6 +128,11 @@ export async function outletFeedback(pool: Pool, slug: string) {
 
 const tokenHash = (token: string) => createHash('sha256').update(token).digest();
 
+export function publicationLease(authorization: string | undefined, installation: unknown): PublicationLease {
+  const token = authorization?.match(/^Bearer ([a-f0-9]{64})$/)?.[1];
+  return { ...(typeof installation === 'string' ? { installation } : {}), ...(token ? { tokenHash: tokenHash(token) } : {}) };
+}
+
 export async function provisionOutlet(pool: Pool, slug: string, name: string, theme: GuestMenuTheme, token: string) {
   if (!new RegExp(outletSlugPattern).test(slug) || !name.trim() || name.length > 100 || name.includes('\0')
     || !['classic', 'photo-led'].includes(theme) || !new RegExp(photoKeyPattern).test(token)) {
@@ -130,20 +142,38 @@ export async function provisionOutlet(pool: Pool, slug: string, name: string, th
     [slug, name.trim(), theme, tokenHash(token)]);
 }
 
-export async function authenticateOutlet(pool: Pool, slug: string, authorization: string | undefined) {
+export async function authenticateOutlet(pool: Pool, slug: string, authorization: string | undefined, installation?: unknown) {
   const token = authorization?.match(/^Bearer ([a-f0-9]{64})$/)?.[1];
-  if (!token || !new RegExp(outletSlugPattern).test(slug)) return false;
-  const { rows } = await pool.query<{ token_hash: Buffer }>('SELECT token_hash FROM hosted_outlets WHERE slug = $1', [slug]);
-  const stored = rows[0]?.token_hash;
+  if (!token || !new RegExp(outletSlugPattern).test(slug)
+    || (installation !== undefined && (typeof installation !== 'string' || !new RegExp(installationPattern).test(installation)))) return false;
+  const { rows } = await pool.query<{ token_hash: Buffer; publication_installation: string | null }>(
+    'SELECT token_hash, publication_installation FROM hosted_outlets WHERE slug = $1', [slug]);
+  const current = rows[0];
+  const stored = current?.token_hash;
   const matches = timingSafeEqual(tokenHash(token), stored ?? Buffer.alloc(32));
-  return Boolean(stored && matches);
+  return Boolean(current && matches && (!current.publication_installation || current.publication_installation === installation));
 }
 
-export async function outletWrite<T>(pool: Pool, slug: string, write: (client: PoolClient) => Promise<T>) {
+export async function outletWrite<T>(pool: Pool, slug: string, write: (client: PoolClient) => Promise<T>, lease?: PublicationLease) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('SELECT slug FROM hosted_outlets WHERE slug = $1 FOR UPDATE', [slug]);
+    const { rows } = await client.query<{ token_hash: Buffer; publication_installation: string | null }>(
+      'SELECT token_hash, publication_installation FROM hosted_outlets WHERE slug = $1 FOR UPDATE', [slug]);
+    // Check again under the lock: request authentication can predate a recovery or token rotation.
+    // Guest claims omit a lease; every publishing write supplies one, including legacy clients.
+    if (lease) {
+      const current = rows[0];
+      if (!current) throw publicationConflict();
+      if ((lease.tokenHash && !timingSafeEqual(lease.tokenHash, current.token_hash))
+        || (lease.installation !== undefined && !new RegExp(installationPattern).test(lease.installation))
+        || (current.publication_installation && current.publication_installation !== lease.installation)) throw publicationConflict();
+      if (!current.publication_installation && lease.installation) {
+        const prior = await client.query<{ installation: string }>('SELECT installation FROM outlet_offer_snapshots WHERE outlet = $1', [slug]);
+        if (prior.rows[0] && prior.rows[0].installation !== lease.installation) throw publicationConflict();
+        await client.query('UPDATE hosted_outlets SET publication_installation = $2 WHERE slug = $1', [slug, lease.installation]);
+      }
+    }
     const result = await write(client);
     await client.query('COMMIT');
     return result;
@@ -160,7 +190,7 @@ export async function hasPhoto(pool: Pool, slug: string, key: string) {
   return result.rowCount === 1;
 }
 
-export async function stagePhoto(pool: Pool, slug: string, key: string, image: Buffer) {
+export async function stagePhoto(pool: Pool, slug: string, key: string, image: Buffer, lease: PublicationLease = {}) {
   return outletWrite(pool, slug, async client => {
     const existing = await client.query('SELECT 1 FROM hosted_photos WHERE outlet = $1 AND key = $2', [slug, key]);
     if (existing.rowCount) return true;
@@ -174,10 +204,10 @@ export async function stagePhoto(pool: Pool, slug: string, key: string, image: B
     if ((rows[0]?.size ?? 0) + image.length > photoQuota) return false;
     await client.query('INSERT INTO hosted_photos (outlet, key, image) VALUES ($1, $2, $3)', [slug, key, image]);
     return true;
-  });
+  }, lease);
 }
 
-export async function acceptMenu(pool: Pool, slug: string, version: number, items: GuestMenuItem[]) {
+export async function acceptMenu(pool: Pool, slug: string, version: number, items: GuestMenuItem[], lease: PublicationLease = {}) {
   const json = JSON.stringify(items);
   const keys = [...new Set(items.flatMap(item => item.photoKey ? [item.photoKey] : []))];
   return outletWrite(pool, slug, async client => {
@@ -192,7 +222,7 @@ export async function acceptMenu(pool: Pool, slug: string, version: number, item
     await client.query('UPDATE hosted_outlets SET version = $2, items = $3, published_at = clock_timestamp() WHERE slug = $1',
       [slug, version, json]);
     return 204;
-  });
+  }, lease);
 }
 
 export async function publicMenu(pool: Pool, slug: string) {

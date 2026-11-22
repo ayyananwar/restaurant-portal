@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { PrivateFeedback } from '../shared/contracts.js';
+import { publicationHeaders } from './publication-headers.js';
 
 type Target = { endpoint: string; token: string };
 
@@ -21,7 +22,7 @@ export async function publishFeedbackCodes(db: DatabaseSync, target: Target, sig
   if (!pending.length) return;
   const response = await send(`${target.endpoint}/feedback-codes`, {
     method: 'PUT', redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
-    headers: { Authorization: `Bearer ${target.token}`, 'Content-Type': 'application/json' },
+    headers: { ...publicationHeaders(db, target.token), 'Content-Type': 'application/json' },
     body: JSON.stringify({ codes: pending.map(({ code, expiresAt }) => ({
       digest: createHash('sha256').update(code.replaceAll('-', '')).digest('hex'), expiresAt
     })) })
@@ -39,9 +40,9 @@ export async function publishFeedbackCodes(db: DatabaseSync, target: Target, sig
   }
 }
 
-export async function loadPrivateFeedback(target: Target, send = fetch): Promise<{ feedback: PrivateFeedback[] }> {
+export async function loadPrivateFeedback(db: DatabaseSync, target: Target, send = fetch): Promise<{ feedback: PrivateFeedback[] }> {
   const response = await send(`${target.endpoint}/feedback`, {
-    headers: { Authorization: `Bearer ${target.token}` }, redirect: 'error', signal: AbortSignal.timeout(5_000)
+    headers: publicationHeaders(db, target.token), redirect: 'error', signal: AbortSignal.timeout(5_000)
   });
   if (!response.ok) {
     await response.body?.cancel();

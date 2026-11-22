@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { PublicOffer } from '../shared/contracts.js';
 import { readCoupons } from './coupons.js';
+import { publicationHeaders } from './publication-headers.js';
 
 type Target = { endpoint: string; token: string };
 type IncomingClaim = { code: string; offerId: string };
@@ -30,7 +31,7 @@ export async function syncOffers(db: DatabaseSync, target: Target, signal: Abort
   const redeemed = awaiting.filter(claim => claim.redeemed).map(claim => claim.code);
   const response = await send(`${target.endpoint}/offer-sync`, {
     method: 'POST', redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
-    headers: { Authorization: `Bearer ${target.token}`, 'Content-Type': 'application/json' },
+    headers: { ...publicationHeaders(db, target.token), 'Content-Type': 'application/json' },
     body: JSON.stringify({ ...state, offers, ready, redeemed })
   });
   if (!response.ok) {

@@ -4,6 +4,7 @@ import { readMenuPhoto } from './menu-photo.js';
 import { readMenu } from './store.js';
 import { publishFeedbackCodes } from './receipt-feedback.js';
 import { syncOffers } from './offer-sync.js';
+import { publicationHeaders } from './publication-headers.js';
 
 type Publication = { version: number; destination: string | null; publishedVersion: number | null; publishedAt: number | null };
 type Target = { endpoint: string; guestUrl: string; token: string };
@@ -62,7 +63,7 @@ export async function publishMenu(db: DatabaseSync, target: Target, signal: Abor
   if (!snapshot) return;
 
   async function request(path: string, method: string, contentType?: string, body?: BodyInit) {
-    const headers = new Headers({ Authorization: `Bearer ${target.token}` });
+    const headers = new Headers(publicationHeaders(db, target.token));
     if (contentType) headers.set('Content-Type', contentType);
     const response = await send(target.endpoint + path, {
       method, headers, body, redirect: 'error', signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)])

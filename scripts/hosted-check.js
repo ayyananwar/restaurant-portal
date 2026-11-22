@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
@@ -9,7 +9,8 @@ import axe from 'axe-core';
 import { chromium } from 'playwright';
 import sharp from 'sharp';
 import { buildHostedApp } from '../dist/hosted/app.js';
-import { hostedPool, prepareHostedStore, provisionOutlet, publicMenu as storedMenu } from '../dist/hosted/database.js';
+import { hostedPool, prepareHostedStore, provisionOutlet, publicMenu as storedMenu, publicationLease, acceptMenu, stagePhoto, stageFeedbackCodes } from '../dist/hosted/database.js';
+import { syncOutletOffers } from '../dist/hosted/offers.js';
 import { twilioVerifier } from '../dist/hosted/phone-verify.js';
 import { setMenuAvailability } from '../dist/server/menu-catalog.js';
 import { createCoupon, setCouponEnabled } from '../dist/server/coupons.js';
@@ -31,6 +32,93 @@ test('remote database connections require verified TLS and cannot override their
   await remote.end();
 });
 
+test('hosted publishing binds one installation and rejects stale writes under the outlet lock', { timeout: 20_000 }, async () => {
+  assert.ok(process.env.HOSTED_TEST_DATABASE_URL, 'Provide the disposable PostgreSQL test URL.');
+  const namespace = `hosted_fence_${randomBytes(8).toString('hex')}`;
+  const setup = hostedPool(process.env.HOSTED_TEST_DATABASE_URL);
+  const pool = hostedPool(process.env.HOSTED_TEST_DATABASE_URL, `-c search_path=${namespace}`);
+  const token = randomBytes(32).toString('hex');
+  const installation = randomUUID();
+  const replacement = randomUUID();
+  const lease = publicationLease(`Bearer ${token}`, installation);
+  let app;
+  let blocker;
+  try {
+    await setup.query(`CREATE SCHEMA ${namespace}`);
+    await prepareHostedStore(pool);
+    await provisionOutlet(pool, 'legacy', 'Legacy outlet', 'classic', token);
+    // Reproduce the previously deployed hosted schema, then verify a repeatable, preserving upgrade.
+    await pool.query('ALTER TABLE hosted_outlets DROP COLUMN publication_installation');
+    await prepareHostedStore(pool);
+    await prepareHostedStore(pool);
+    app = await buildHostedApp(pool, undefined, { origin: 'https://example.test', phoneKey: randomBytes(32), verifier: {} });
+    const path = '/api/publish/legacy';
+    const inject = (method, suffix, payload, identity = installation, credential = token) => app.inject({
+      method, url: path + suffix, payload,
+      headers: { authorization: `Bearer ${credential}`, ...(identity === null ? {} : { 'x-outlet-installation': identity }) }
+    });
+    const offers = { installation, version: 1, offers: [], ready: [], redeemed: [] };
+    assert.equal((await inject('POST', '/offer-sync', offers, null)).statusCode, 200);
+    assert.equal((await inject('PUT', '/menu', { version: 1, items: [] }, replacement)).statusCode, 409);
+    assert.equal((await pool.query('SELECT publication_installation FROM hosted_outlets')).rows[0].publication_installation, null);
+    assert.equal((await inject('PUT', '/menu', { version: 1, items: [] })).statusCode, 204);
+    assert.equal((await pool.query('SELECT publication_installation FROM hosted_outlets')).rows[0].publication_installation, installation);
+    for (const identity of [null, replacement, 'invalid']) {
+      for (const [method, suffix, payload] of [
+        ['PUT', '/menu', { version: 2, items: [] }],
+        ['POST', '/offer-sync', offers],
+        ['PUT', '/feedback-codes', { codes: [{ digest: 'a'.repeat(64), expiresAt: Date.now() + 1000 }] }],
+        ['GET', '/feedback'], ['HEAD', `/photos/${'a'.repeat(64)}`], ['PUT', `/photos/${'a'.repeat(64)}`, 'bad image']
+      ]) assert.equal((await inject(method, suffix, payload, identity)).statusCode, 401, `${method} ${suffix}`);
+    }
+    assert.equal((await inject('POST', '/offer-sync', { ...offers, installation: replacement })).statusCode, 409);
+    assert.equal((await inject('GET', '/feedback', undefined, installation, 'f'.repeat(64))).statusCode, 401);
+    assert.equal((await inject('GET', '/feedback')).statusCode, 200);
+
+    // The request passes HTTP authentication, then waits behind a simulated recovery transaction.
+    blocker = await pool.connect();
+    await blocker.query('BEGIN');
+    await blocker.query("SELECT slug FROM hosted_outlets WHERE slug = 'legacy' FOR UPDATE");
+    const waiting = inject('PUT', '/menu', { version: 99, items: [] });
+    const response = Promise.resolve(waiting);
+    let blocked = false;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const state = await setup.query(`SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock'
+        AND query = 'SELECT token_hash, publication_installation FROM hosted_outlets WHERE slug = $1 FOR UPDATE'`);
+      if (state.rowCount) { blocked = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(blocked, true, 'The publishing request reached the locked write after authentication.');
+    await blocker.query("UPDATE hosted_outlets SET publication_installation = $1 WHERE slug = 'legacy'", [replacement]);
+    await blocker.query('COMMIT');
+    blocker.release();
+    blocker = undefined;
+    assert.equal((await response).statusCode, 409);
+    assert.equal((await pool.query('SELECT version FROM hosted_outlets')).rows[0].version, '1');
+    assert.equal((await inject('PUT', '/menu', { version: 2, items: [] }, replacement)).statusCode, 204);
+    // Exercise every write primitive too: no route may accidentally omit the locked check.
+    const code = { digest: 'b'.repeat(64), expiresAt: Date.now() + 1000 };
+    for (const write of [
+      () => acceptMenu(pool, 'legacy', 100, [], lease),
+      () => stagePhoto(pool, 'legacy', 'c'.repeat(64), Buffer.from('fixture'), lease),
+      () => stageFeedbackCodes(pool, 'legacy', [code], lease),
+      () => syncOutletOffers(pool, 'legacy', offers, lease),
+      () => acceptMenu(pool, 'legacy', 100, [])
+    ]) await assert.rejects(write, { statusCode: 409 });
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM hosted_photos')).rows[0].count, 0);
+    assert.equal((await pool.query('SELECT count(*)::int AS count FROM receipt_feedback')).rows[0].count, 0);
+    const newLease = publicationLease(`Bearer ${token}`, replacement);
+    await pool.query('UPDATE hosted_outlets SET token_hash = $1', [createHash('sha256').update(randomBytes(32)).digest()]);
+    await assert.rejects(() => stageFeedbackCodes(pool, 'legacy', [code], newLease), { statusCode: 409 });
+  } finally {
+    if (blocker) { await blocker.query('ROLLBACK'); blocker.release(); }
+    await app?.close();
+    await pool.end();
+    try { await setup.query(`DROP SCHEMA IF EXISTS ${namespace} CASCADE`); }
+    finally { await setup.end(); }
+  }
+});
+
 test('PostgreSQL hosted menu, HTTPS publication and guest browser flow', { timeout: 65_000 }, async () => {
   const { HOSTED_TEST_DATABASE_URL, HOSTED_TEST_TLS_KEY, NODE_EXTRA_CA_CERTS, RESTAURANT_TEST_SCREENSHOTS } = process.env;
   assert.ok(HOSTED_TEST_DATABASE_URL && HOSTED_TEST_TLS_KEY && NODE_EXTRA_CA_CERTS,
@@ -39,6 +127,7 @@ test('PostgreSQL hosted menu, HTTPS publication and guest browser flow', { timeo
   const setup = hostedPool(HOSTED_TEST_DATABASE_URL);
   const pool = hostedPool(HOSTED_TEST_DATABASE_URL, `-c search_path=${namespace}`);
   const db = openStore(':memory:');
+  const installation = db.prepare('SELECT installation FROM offer_publication WHERE id = 1').get().installation;
   const token = randomBytes(32).toString('hex');
   const otherToken = randomBytes(32).toString('hex');
   const signal = new AbortController().signal;
@@ -95,7 +184,7 @@ test('PostgreSQL hosted menu, HTTPS publication and guest browser flow', { timeo
 
     async function put(path, body, credential = token, contentType = 'application/json') {
       return fetch(`${origin}/api/publish/${path}`, { method: 'PUT', body: contentType === 'application/json' ? JSON.stringify(body) : body,
-        headers: { Authorization: `Bearer ${credential}`, 'Content-Type': contentType } });
+        headers: { Authorization: `Bearer ${credential}`, 'X-Outlet-Installation': installation, 'Content-Type': contentType } });
     }
     const png = await sharp({ create: { width: 120, height: 80, channels: 3, background: '#83694f' } }).png().toBuffer();
     db.exec(`INSERT INTO menu (name, category, price_paise, description) VALUES ('Ginger chai', 'Drinks', 4500, 'Brewed with ginger');
@@ -229,7 +318,7 @@ test('PostgreSQL hosted menu, HTTPS publication and guest browser flow', { timeo
     await syncOffers(db, target, signal, (url, init) => { offersWire = JSON.parse(init.body); return fetch(url, init); });
     assert.deepEqual(offersWire.offers.map(offer => offer.id), ['TEATIME']);
     const anotherInstallation = await fetch(`${target.endpoint}/offer-sync`, {
-      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'X-Outlet-Installation': installation, 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...offersWire, installation: '00000000-0000-0000-0000-000000000000' })
     });
     assert.equal(anotherInstallation.status, 409);
@@ -290,7 +379,7 @@ test('PostgreSQL hosted menu, HTTPS publication and guest browser flow', { timeo
     assert.equal((await claim()).status, 422);
     assert.equal((await readOffers()).claims[0].status, 'redeemed');
     const staleOffer = await fetch(`${target.endpoint}/offer-sync`, {
-      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(offersWire)
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'X-Outlet-Installation': installation, 'Content-Type': 'application/json' }, body: JSON.stringify(offersWire)
     });
     assert.equal(staleOffer.status, 409);
     const slip = readTables(db, billing, target)[0].receipts[0].feedback;
@@ -328,10 +417,10 @@ test('PostgreSQL hosted menu, HTTPS publication and guest browser flow', { timeo
     assert.equal((await sendFeedback('ranchi-cafe', response)).status, 422);
     assert.equal((await guest('/api/publish/ranchi-cafe/feedback')).status, 401);
     assert.equal((await fetch(`${origin}/api/publish/ranchi-cafe/feedback`, { headers: { Authorization: `Bearer ${otherToken}` } })).status, 401);
-    const ownerInbox = await loadPrivateFeedback(target);
+    const ownerInbox = await loadPrivateFeedback(db, target);
     assert.deepEqual(Object.keys(ownerInbox.feedback[0]).sort(), ['comment', 'id', 'rating', 'receivedAt']);
     assert.equal(ownerInbox.feedback[0].comment, response.comment);
-    assert.deepEqual(await loadPrivateFeedback({ ...target, endpoint: `${origin}/api/publish/other`, token: otherToken }), { feedback: [] });
+    assert.deepEqual(await loadPrivateFeedback(db, { ...target, endpoint: `${origin}/api/publish/other`, token: otherToken }), { feedback: [] });
     const staffOrigin = 'http://127.0.0.1:3100';
     const staffApp = buildApp(db, { origin: staffOrigin, publication: target });
     try {

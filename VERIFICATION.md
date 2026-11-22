@@ -1,5 +1,16 @@
 # Development verification
 
+## Hosted publishing identity · 23 November 2026 · unreleased
+
+This step prepares coordinated recovery without enabling hosted restores. The source build adds a nullable PostgreSQL installation binding; the local schema remains 19 and the existing 0.4.0 Windows ZIP is unchanged.
+
+- **Reason for the change:** menu, photos and receipt feedback previously authenticated only with the outlet secret. They now identify the same installation as offer sync. Every publishing write rechecks both the installation binding and the credential hash under the outlet row lock. A request authenticated before a recovery or secret rotation must not commit afterward.
+- **Upgrade behavior:** the repeatable hosted schema update preserves existing rows. A legacy publisher remains accepted while unbound. The first identifying write checks any existing offer installation before binding. Mismatched identifiers, missing identifiers after binding, malformed identifiers and conflicting offer-body identifiers are rejected. Startup requires the new column, so a missed hosted schema update fails before serving traffic. The local publisher must not be downgraded to a build lacking the header once bound.
+- **Automated checks:** type checking, the production build and all 42 service/storage tests passed. All eight encrypted-backup/recovery tests passed, including the installed Windows wrapper, owner review and publisher pause/resume. The hosted suite passed all three tests against isolated PostgreSQL 17 with verified TLS and automated Edge, including the existing menu, offer-claim and feedback workflow.
+- **Concurrency evidence:** the test holds the outlet row lock, sends a real HTTP-handler request, observes that request waiting in PostgreSQL after authentication, changes the binding in the holding transaction, then releases it. The waiting request returns 409 and the menu version remains unchanged. The replacement identity can publish. All four write primitives reject the former identity; photo and feedback rows remain absent. A changed credential also rejects an already captured publishing lease.
+- **Fixture boundary:** the previous disposable database's login was unavailable. A separate `data/hosted-fence-test` cluster was initialized rather than altering its accounts or data. Keys, passwords and database files remain ignored. No live outlet or preview database was restored, and no installation-switching API was introduced.
+- **Still open:** coordinated hosted checkpoint/claim retirement, a durable local recovery journal and interrupted-startup protection, matched release packaging, and the physical checks listed below. Hosted restore refusal remains in place. The user has deferred manual testing; no new physical test result is claimed.
+
 ## Backup and controlled recovery · 23 November 2026
 
 Version 0.4.0 adds manual encrypted owner export and an offline recovery tool; schema 19 records each restoration and owner review. This is a development milestone, not production sign-off. The initial scope is unlinked outlets. Hosted recovery and the physical operational checks remain open below.

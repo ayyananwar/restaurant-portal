@@ -4,7 +4,7 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import sharp from 'sharp';
 import { maxMenuPhotoBytes, type GuestMenuItem } from '../shared/contracts.js';
-import { acceptMenu, authenticateOutlet, hasPhoto, outletFeedback, outletSlugPattern, photoKeyPattern, publicMenu, publicPhoto, stageFeedbackCodes, stagePhoto } from './database.js';
+import { acceptMenu, authenticateOutlet, hasPhoto, outletFeedback, outletSlugPattern, photoKeyPattern, publicationLease, publicMenu, publicPhoto, stageFeedbackCodes, stagePhoto } from './database.js';
 import { addGuestAccountRoutes } from './guest-account.js';
 import type { GuestAccountOptions } from './phone-verify.js';
 import { syncOutletOffers, type OfferSync } from './offers.js';
@@ -70,7 +70,7 @@ export async function buildHostedApp(pool: Pool, tls?: { key: Buffer; cert: Buff
   addGuestAccountRoutes(app, pool, accounts);
 
   const publish = (contentType?: string) => async (request: FastifyRequest<{ Params: Outlet }>, reply: FastifyReply) => {
-    if (!(await authenticateOutlet(pool, request.params.slug, request.headers.authorization))) {
+    if (!(await authenticateOutlet(pool, request.params.slug, request.headers.authorization, request.headers['x-outlet-installation']))) {
       return reply.code(401).send();
     }
     if (contentType && request.headers['content-type']?.split(';')[0] !== contentType) return reply.code(415).send();
@@ -94,11 +94,11 @@ export async function buildHostedApp(pool: Pool, tls?: { key: Buffer; cert: Buff
         } }
       }
     } }
-  }, async ({ params, body }, reply) => {
+  }, async ({ params, body, headers }, reply) => {
     if (!accounts) return reply.code(503).send();
     if (new Set(body.offers.map(offer => offer.id)).size !== body.offers.length || body.offers.some(offer =>
       !offer.title.trim() || /[\uD800-\uDFFF]/u.test(offer.title))) return reply.code(400).send();
-    const result = await syncOutletOffers(pool, params.slug, body);
+    const result = await syncOutletOffers(pool, params.slug, body, publicationLease(headers.authorization, headers['x-outlet-installation']));
     return result ? reply.send(result) : reply.code(409).send();
   });
 
@@ -111,10 +111,10 @@ export async function buildHostedApp(pool: Pool, tls?: { key: Buffer; cert: Buff
         } }
       }
     } }
-  }, async ({ params, body }, reply) => {
+  }, async ({ params, body, headers }, reply) => {
     if (!accounts) return reply.code(503).send();
     if (body.codes.some(code => code.expiresAt > Date.now() + 15 * 86_400_000)) return reply.code(400).send();
-    await stageFeedbackCodes(pool, params.slug, body.codes);
+    await stageFeedbackCodes(pool, params.slug, body.codes, publicationLease(headers.authorization, headers['x-outlet-installation']));
     return reply.code(204).send();
   });
 
@@ -128,7 +128,7 @@ export async function buildHostedApp(pool: Pool, tls?: { key: Buffer; cert: Buff
   let decoding = 0;
   app.put<{ Params: Photo; Body: Buffer }>('/api/publish/:slug/photos/:key', {
     onRequest: publish('image/webp'), bodyLimit: maxMenuPhotoBytes, schema: { params: photoParams }
-  }, async ({ params, body }, reply) => {
+  }, async ({ params, body, headers }, reply) => {
     if (!Buffer.isBuffer(body) || createHash('sha256').update(body).digest('hex') !== params.key) return reply.code(400).send();
     if (await hasPhoto(pool, params.slug, params.key)) return reply.code(204).send();
     if (decoding >= 2) return reply.code(503).send();
@@ -144,7 +144,7 @@ export async function buildHostedApp(pool: Pool, tls?: { key: Buffer; cert: Buff
     } finally {
       decoding--;
     }
-    return reply.code(await stagePhoto(pool, params.slug, params.key, body) ? 204 : 413).send();
+    return reply.code(await stagePhoto(pool, params.slug, params.key, body, publicationLease(headers.authorization, headers['x-outlet-installation'])) ? 204 : 413).send();
   });
 
   app.put<{ Params: Outlet; Body: Snapshot }>('/api/publish/:slug/menu', {
@@ -157,11 +157,11 @@ export async function buildHostedApp(pool: Pool, tls?: { key: Buffer; cert: Buff
         } }
       } }
     }
-  }, async ({ params, body }, reply) => {
+  }, async ({ params, body, headers }, reply) => {
     if (new Set(body.items.map(item => item.id)).size !== body.items.length || body.items.some(item =>
       !item.name.trim() || !item.category.trim() || (item.available && item.availableAfter !== null)
       || [item.name, item.category, item.description].some(value => /[\uD800-\uDFFF]/u.test(value)))) return reply.code(400).send();
-    return reply.code(await acceptMenu(pool, params.slug, body.version, body.items)).send();
+    return reply.code(await acceptMenu(pool, params.slug, body.version, body.items, publicationLease(headers.authorization, headers['x-outlet-installation']))).send();
   });
 
   app.get<{ Params: Outlet }>('/api/public-menu/:slug', { schema: { params: outletParams } }, async ({ params }, reply) => {

@@ -220,6 +220,10 @@ The counter checks a `CL-` code through the same receipt workflow. The local rec
 
 Apply `npm.cmd run setup:hosted -- --schema-only` before enabling offers on an existing host. Offers need guest phone sign-in and one authoritative counter database per outlet. The receiver binds offer sync to that database's installation identifier. Reconcile pending and redeemed claims before replacing or restoring the authoritative database. The first release supports 1,000 public offers per outlet.
 
+The current source build also sends `X-Outlet-Installation` on menu/photo publication, offer sync, receipt-code publication and private feedback retrieval. Apply the hosted schema update **before starting this hosted build**, then upgrade the local publisher. An existing host accepts its legacy publisher until the first write identifying the installation; that write binds publication to the identifier, checking any existing offer snapshot first. Later writes must carry the same identifier, and identity plus credentials are checked again under the outlet transaction lock. Guest browsing and account claims keep their existing flow.
+
+This protection is an unreleased step toward coordinated recovery. It does not enable hosted restores or expose an installation-switching API. Do not downgrade the local publisher to a build without the installation header after binding: its hosted requests will be rejected even though local operations still work. The existing 0.4.0 Windows ZIP has not been rebuilt with this change; publish a matched, verified kit before rollout. Do not clear the hosted binding to bypass a rejection.
+
 ## Private receipt feedback
 
 When the counter records payment on a new whole or split check, the staff app creates one feedback code for that paid receipt. Choose **Print feedback slip** before releasing the table if the receipt software cannot print the code. The slip has the code, expiry, and the guest-menu address when configured. It leaves out the receipt reference and amount.

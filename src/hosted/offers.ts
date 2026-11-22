@@ -1,14 +1,15 @@
 import { randomBytes } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { OfferClaim, PublicOffer } from '../shared/contracts.js';
-import { outletWrite } from './database.js';
+import { outletWrite, type PublicationLease } from './database.js';
 
 export type OfferSync = { installation: string; version: number; offers: PublicOffer[]; ready: string[]; redeemed: string[] };
 type ClaimRow = { offerId: string; title: string; code: string; ready: boolean; redeemed: boolean };
 
 const active = (offer: PublicOffer, now: number) => offer.enabled && (offer.expiresAt === null || offer.expiresAt > now);
 
-export async function syncOutletOffers(pool: Pool, slug: string, input: OfferSync) {
+export async function syncOutletOffers(pool: Pool, slug: string, input: OfferSync, lease: PublicationLease = {}) {
+  if (lease.installation && lease.installation !== input.installation) return;
   const offers = JSON.stringify(input.offers);
   return outletWrite(pool, slug, async client => {
     const { rows } = await client.query<{ installation: string; version: string; identical: boolean }>(`
@@ -28,7 +29,7 @@ export async function syncOutletOffers(pool: Pool, slug: string, input: OfferSyn
       ORDER BY claimed_at, code LIMIT 100
     `, [slug]);
     return { claims: pending.rows };
-  });
+  }, lease);
 }
 
 export async function readGuestOffers(pool: Pool, slug: string, session: string) {

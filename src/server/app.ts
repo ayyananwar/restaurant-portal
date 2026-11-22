@@ -490,7 +490,7 @@ export function buildApp(db: DatabaseSync, options: {
     requireStaff(request, 'admin');
     if (!options.publication) return { configured: false, feedback: [] };
     try {
-      return { configured: true, ...(await loadPrivateFeedback(options.publication)) };
+      return { configured: true, ...(await loadPrivateFeedback(db, options.publication)) };
     } catch {
       throw new WorkflowError(503, 'Feedback could not load. Check the internet connection and try again.');
     }
