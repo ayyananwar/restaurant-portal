@@ -18,6 +18,8 @@ const pool = hostedPool(connectionString);
 pool.on('error', () => console.error('Hosted database connection interrupted.'));
 try {
   await pool.query('SELECT publication_installation FROM hosted_outlets LIMIT 0');
+  await pool.query('SELECT invalidated_at FROM outlet_offer_claims LIMIT 0');
+  await pool.query('SELECT 1 FROM outlet_retired_offers, outlet_recoveries LIMIT 0');
   if (accounts) await pool.query('SELECT 1 FROM guest_accounts, receipt_feedback, outlet_offer_snapshots, outlet_offer_claims LIMIT 0');
   const tls = key && cert ? { key: await readFile(key), cert: await readFile(cert) } : undefined;
   const app = await buildHostedApp(pool, tls, accounts);

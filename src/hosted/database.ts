@@ -101,9 +101,28 @@ export async function prepareHostedStore(pool: Pool) {
       claimed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (outlet, offer_id, account_id)
     );
-    CREATE INDEX IF NOT EXISTS outlet_offer_pending ON outlet_offer_claims (outlet, claimed_at, code) WHERE NOT ready;
     CREATE INDEX IF NOT EXISTS outlet_offer_account ON outlet_offer_claims (outlet, account_id, claimed_at DESC);
     ALTER TABLE hosted_outlets ADD COLUMN IF NOT EXISTS publication_installation UUID;
+    ALTER TABLE outlet_offer_claims ADD COLUMN IF NOT EXISTS invalidated_at TIMESTAMPTZ;
+    DROP INDEX IF EXISTS outlet_offer_pending;
+    CREATE INDEX IF NOT EXISTS outlet_offer_pending_live ON outlet_offer_claims (outlet, claimed_at, code)
+      WHERE NOT ready AND invalidated_at IS NULL;
+    CREATE TABLE IF NOT EXISTS outlet_retired_offers (
+      outlet TEXT NOT NULL REFERENCES hosted_outlets(slug),
+      offer_id TEXT NOT NULL,
+      PRIMARY KEY (outlet, offer_id)
+    );
+    CREATE TABLE IF NOT EXISTS outlet_recoveries (
+      outlet TEXT NOT NULL REFERENCES hosted_outlets(slug),
+      request_id UUID NOT NULL,
+      payload_hash TEXT NOT NULL,
+      old_installation UUID NOT NULL,
+      new_installation UUID NOT NULL,
+      checkpoint JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (outlet, request_id),
+      UNIQUE (outlet, new_installation)
+    );
   `);
 }
 

@@ -9,10 +9,16 @@ export function GuestFeedback({ outlet }: { outlet: string }) {
   const codeInput = useRef<HTMLInputElement>(null);
   const openButton = useRef<HTMLButtonElement>(null);
   const confirmation = useRef<HTMLParagraphElement>(null);
+  const closeFocus = useRef<'confirmation' | 'button' | null>(null);
 
   useEffect(() => {
     if (open) codeInput.current?.focus();
-  }, [open]);
+    else if (closeFocus.current) {
+      // Focus after React mounts the destination; an animation frame can run before that commit.
+      (closeFocus.current === 'confirmation' ? confirmation.current : openButton.current)?.focus();
+      closeFocus.current = null;
+    }
+  }, [open, sent]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -24,9 +30,9 @@ export function GuestFeedback({ outlet }: { outlet: string }) {
       await api(`/api/guest-feedback/${outlet}`, 'POST', {
         code: String(fields.get('feedbackCode')), rating: Number(fields.get('rating')), comment: String(fields.get('comment') ?? '')
       });
+      closeFocus.current = 'confirmation';
       setSent(true);
       setOpen(false);
-      window.requestAnimationFrame(() => confirmation.current?.focus());
     } catch (error) {
       setError(error instanceof RequestError ? error.message : 'Check your connection and try again.');
     } finally {
@@ -56,9 +62,9 @@ export function GuestFeedback({ outlet }: { outlet: string }) {
     <div className="guest-account-row">
       <button type="submit" disabled={busy}>{busy ? 'Sending…' : 'Send feedback'}</button>
       <button type="button" disabled={busy} onClick={() => {
+        closeFocus.current = 'button';
         setOpen(false);
         setError('');
-        window.requestAnimationFrame(() => openButton.current?.focus());
       }}>Cancel feedback</button>
     </div>
   </form>;

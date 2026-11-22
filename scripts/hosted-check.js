@@ -10,7 +10,8 @@ import { chromium } from 'playwright';
 import sharp from 'sharp';
 import { buildHostedApp } from '../dist/hosted/app.js';
 import { hostedPool, prepareHostedStore, provisionOutlet, publicMenu as storedMenu, publicationLease, acceptMenu, stagePhoto, stageFeedbackCodes } from '../dist/hosted/database.js';
-import { syncOutletOffers } from '../dist/hosted/offers.js';
+import { syncOutletOffers, claimOffer, readGuestOffers } from '../dist/hosted/offers.js';
+import { coordinateHostedRecovery } from '../dist/hosted/recovery.js';
 import { twilioVerifier } from '../dist/hosted/phone-verify.js';
 import { setMenuAvailability } from '../dist/server/menu-catalog.js';
 import { createCoupon, setCouponEnabled } from '../dist/server/coupons.js';
@@ -113,6 +114,140 @@ test('hosted publishing binds one installation and rejects stale writes under th
   } finally {
     if (blocker) { await blocker.query('ROLLBACK'); blocker.release(); }
     await app?.close();
+    await pool.end();
+    try { await setup.query(`DROP SCHEMA IF EXISTS ${namespace} CASCADE`); }
+    finally { await setup.end(); }
+  }
+});
+
+test('hosted recovery retires old claims atomically and safely retries its checkpoint', { timeout: 20_000 }, async () => {
+  assert.ok(process.env.HOSTED_TEST_DATABASE_URL, 'Provide the disposable PostgreSQL test URL.');
+  const namespace = `hosted_recovery_${randomBytes(8).toString('hex')}`;
+  const setup = hostedPool(process.env.HOSTED_TEST_DATABASE_URL);
+  const pool = hostedPool(process.env.HOSTED_TEST_DATABASE_URL, `-c search_path=${namespace}`);
+  const token = randomBytes(32).toString('hex');
+  const installation = randomUUID();
+  const authorization = `Bearer ${token}`;
+  const lease = publicationLease(authorization, installation);
+  const account = randomUUID();
+  const session = randomBytes(32).toString('hex');
+  const offer = id => ({ id, title: id, discountPaise: 500, minimumPaise: 0, expiresAt: null, enabled: true });
+  const request = { requestId: randomUUID(), sourceHash: 'a'.repeat(64), installation, newInstallation: randomUUID(),
+    menuVersion: 23, offerVersion: 11, retireOffers: ['BACKUPONLY', 'READY'] };
+  const recover = (input = request, credential = authorization, slug = 'recover') => coordinateHostedRecovery(pool, slug, credential, input);
+  try {
+    await setup.query(`CREATE SCHEMA ${namespace}`);
+    await prepareHostedStore(pool);
+    await provisionOutlet(pool, 'recover', 'Recovery outlet', 'classic', token);
+    await provisionOutlet(pool, 'other', 'Other outlet', 'classic', randomBytes(32).toString('hex'));
+    await pool.query('INSERT INTO guest_accounts(id, phone_key, phone_last_four) VALUES($1,$2,$3)', [account, session, '0000']);
+    await pool.query("INSERT INTO guest_sessions(token_hash,account_id,expires_at) VALUES($1,$2,now()+interval '1 hour')", [session, account]);
+    const dish = { id: 1, name: 'Chai', category: 'Drinks', pricePaise: 6000, description: '', available: true, availableAfter: null, photoKey: null };
+    assert.equal(await acceptMenu(pool, 'recover', 17, [dish], lease), 204);
+    const beforeMenu = await storedMenu(pool, 'recover');
+    await syncOutletOffers(pool, 'recover', { installation, version: 50, offers: ['READY', 'WAITING', 'USED'].map(offer), ready: [], redeemed: [] }, lease);
+    for (const id of ['READY', 'WAITING', 'USED']) assert.equal(await claimOffer(pool, 'recover', id, session), 204);
+    const claims = (await pool.query('SELECT offer_id, code FROM outlet_offer_claims')).rows;
+    const code = id => claims.find(row => row.offer_id === id).code;
+    await syncOutletOffers(pool, 'recover', { installation, version: 50, offers: ['READY', 'WAITING', 'USED'].map(offer),
+      ready: [code('READY'), code('USED')], redeemed: [code('USED')] }, lease);
+    await pool.query(`INSERT INTO outlet_offer_claims(outlet,offer_id,account_id,title,code)
+      VALUES('recover','OLDHISTORY',$1,'Older campaign','CL-0000000000000000')`, [account]);
+    // Upgrade the preceding hosted schema with populated claims, preserving redemption state.
+    await pool.query(`DROP TABLE outlet_recoveries, outlet_retired_offers;
+      ALTER TABLE outlet_offer_claims DROP COLUMN invalidated_at;
+      CREATE INDEX outlet_offer_pending ON outlet_offer_claims(outlet,claimed_at,code) WHERE NOT ready;`);
+    await prepareHostedStore(pool);
+    await prepareHostedStore(pool);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM outlet_offer_claims')).rows[0].n, 4);
+    assert.equal((await pool.query('SELECT redeemed FROM outlet_offer_claims WHERE code=$1', [code('USED')])).rows[0].redeemed, true);
+
+    for (const invalid of [ { ...request, sourceHash: 'bad' }, { ...request, retireOffers: ['READY', 'READY'] },
+      { ...request, menuVersion: Number.MAX_SAFE_INTEGER }, { ...request, offerVersion: 1.5 },
+      { ...request, newInstallation: installation }, { ...request, unexpected: true } ]) {
+      await assert.rejects(() => recover(invalid), { statusCode: 400 });
+    }
+    await assert.rejects(() => coordinateHostedRecovery(pool, 'recover', undefined, request), { statusCode: 401 });
+    await assert.rejects(() => recover(request, `Bearer ${'f'.repeat(64)}`), { statusCode: 401 });
+    await assert.rejects(() => recover(request, authorization, 'other'), { statusCode: 401 });
+    await assert.rejects(() => recover({ ...request, installation: randomUUID() }), { statusCode: 409 });
+
+    // Fail the final write, after all prior mutations, and prove the entire transaction rolls back.
+    await pool.query(`CREATE FUNCTION fail_checkpoint() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'injected checkpoint write failure'; END $$;
+      CREATE TRIGGER fail_checkpoint BEFORE INSERT ON outlet_recoveries FOR EACH ROW EXECUTE FUNCTION fail_checkpoint();`);
+    await assert.rejects(() => recover(), /injected checkpoint write failure/);
+    assert.equal((await pool.query('SELECT publication_installation FROM hosted_outlets WHERE slug=$1', ['recover'])).rows[0].publication_installation, installation);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM outlet_offer_claims WHERE invalidated_at IS NOT NULL')).rows[0].n, 0);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM outlet_retired_offers')).rows[0].n, 0);
+    assert.equal((await pool.query('SELECT version FROM outlet_offer_snapshots')).rows[0].version, '50');
+    await pool.query('DROP TRIGGER fail_checkpoint ON outlet_recoveries; DROP FUNCTION fail_checkpoint();');
+
+    const [checkpoint, duplicate] = await Promise.all([recover(), recover()]);
+    assert.deepEqual(duplicate, checkpoint);
+    assert.equal(checkpoint.menuVersionNext, 24);
+    assert.equal(checkpoint.offerVersionNext, 51);
+    assert.deepEqual(checkpoint.retiredOffers, ['BACKUPONLY', 'OLDHISTORY', 'READY', 'USED', 'WAITING']);
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM outlet_recoveries')).rows[0].n, 1);
+    assert.deepEqual(await storedMenu(pool, 'recover'), beforeMenu);
+    const recovered = await readGuestOffers(pool, 'recover', session);
+    assert.deepEqual(recovered.offers, []);
+    assert.equal(recovered.claims.find(claim => claim.offerId === 'USED').status, 'redeemed');
+    assert.ok(recovered.claims.filter(claim => claim.offerId !== 'USED').every(claim => claim.status === 'unavailable'));
+    assert.ok(recovered.claims.every(claim => !Object.hasOwn(claim, 'code')));
+    await assert.rejects(() => acceptMenu(pool, 'recover', 999, [], lease), { statusCode: 409 });
+    await assert.rejects(() => recover({ ...request, sourceHash: 'b'.repeat(64) }), { statusCode: 409 });
+    await assert.rejects(() => recover({ ...request, requestId: randomUUID() }), { statusCode: 409 });
+
+    const newLease = publicationLease(authorization, request.newInstallation);
+    const sync = offers => syncOutletOffers(pool, 'recover', { installation: request.newInstallation, version: checkpoint.offerVersionNext,
+      offers, ready: [code('WAITING')], redeemed: [code('READY')] }, newLease);
+    assert.equal(await sync([offer('BACKUPONLY')]), undefined);
+    assert.equal(await sync([offer('READY')]), undefined);
+    const fresh = [offer('FRESH'), { ...offer('READY'), enabled: false }];
+    assert.deepEqual(await sync(fresh), { claims: [] });
+    const oldState = (await pool.query('SELECT ready,redeemed FROM outlet_offer_claims WHERE code=$1', [code('WAITING')])).rows[0];
+    assert.deepEqual(oldState, { ready: false, redeemed: false });
+    assert.equal((await pool.query('SELECT redeemed FROM outlet_offer_claims WHERE code=$1', [code('READY')])).rows[0].redeemed, false);
+    assert.equal(await claimOffer(pool, 'recover', 'READY', session), 422);
+    assert.equal(await claimOffer(pool, 'recover', 'FRESH', session), 204);
+    const pending = await sync(fresh);
+    assert.equal(pending.claims.length, 1);
+    assert.equal(pending.claims[0].offerId, 'FRESH');
+    assert.deepEqual(await recover({ ...request, retireOffers: [...request.retireOffers].reverse() }), checkpoint);
+    assert.deepEqual((await readGuestOffers(pool, 'recover', session)).offers.map(item => item.id), ['FRESH']);
+
+    // Even an erroneous snapshot cannot make a permanently retired campaign claimable again.
+    await pool.query('UPDATE outlet_offer_snapshots SET offers=$1 WHERE outlet=$2', [JSON.stringify([offer('READY')]), 'recover']);
+    assert.deepEqual((await readGuestOffers(pool, 'recover', session)).offers, []);
+    assert.equal(await claimOffer(pool, 'recover', 'READY', session), 422);
+    await pool.query('UPDATE outlet_offer_snapshots SET offers=$1 WHERE outlet=$2', [JSON.stringify(fresh), 'recover']);
+    await assert.rejects(() => recover({ ...request, requestId: randomUUID(), installation: request.newInstallation, newInstallation: installation }), { statusCode: 409 });
+    const secondRequest = { ...request, requestId: randomUUID(), installation: request.newInstallation, newInstallation: randomUUID(), sourceHash: 'b'.repeat(64) };
+    const competing = await Promise.allSettled([recover(secondRequest), recover({ ...secondRequest, requestId: randomUUID(), newInstallation: randomUUID() })]);
+    assert.equal(competing.filter(result => result.status === 'fulfilled').length, 1);
+    assert.equal(competing.find(result => result.status === 'rejected').reason.statusCode, 409);
+    await assert.rejects(() => recover(), { statusCode: 409 });
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM outlet_retired_offers WHERE outlet=$1', ['recover'])).rows[0].n, 6);
+
+    // Unbound menu-only history cannot prove identity; legacy offer snapshots can.
+    const legacyToken = randomBytes(32).toString('hex');
+    await provisionOutlet(pool, 'legacy', 'Legacy', 'classic', legacyToken);
+    const legacyRequest = { ...request, requestId: randomUUID(), newInstallation: randomUUID() };
+    await assert.rejects(() => coordinateHostedRecovery(pool, 'legacy', `Bearer ${legacyToken}`, legacyRequest), { statusCode: 409 });
+    await syncOutletOffers(pool, 'legacy', { installation, version: 1, offers: [], ready: [], redeemed: [] });
+    await pool.query('UPDATE hosted_outlets SET version=$1 WHERE slug=$2', [String(Number.MAX_SAFE_INTEGER), 'legacy']);
+    await assert.rejects(() => coordinateHostedRecovery(pool, 'legacy', `Bearer ${legacyToken}`, legacyRequest), { statusCode: 409 });
+    await pool.query('UPDATE hosted_outlets SET version=1 WHERE slug=$1', ['legacy']);
+    await pool.query('UPDATE outlet_offer_snapshots SET version=$1 WHERE outlet=$2', [String(Number.MAX_SAFE_INTEGER), 'legacy']);
+    await assert.rejects(() => coordinateHostedRecovery(pool, 'legacy', `Bearer ${legacyToken}`, legacyRequest), { statusCode: 409 });
+    await pool.query('UPDATE outlet_offer_snapshots SET version=1 WHERE outlet=$1', ['legacy']);
+    const legacyCheckpoint = await coordinateHostedRecovery(pool, 'legacy', `Bearer ${legacyToken}`, legacyRequest);
+    assert.equal(legacyCheckpoint.newInstallation, legacyRequest.newInstallation);
+    const rotated = createHash('sha256').update(randomBytes(32)).digest();
+    await pool.query('UPDATE hosted_outlets SET token_hash=$1 WHERE slug=$2', [rotated, 'legacy']);
+    await assert.rejects(() => coordinateHostedRecovery(pool, 'legacy', `Bearer ${legacyToken}`, legacyRequest), { statusCode: 401 });
+  } finally {
     await pool.end();
     try { await setup.query(`DROP SCHEMA IF EXISTS ${namespace} CASCADE`); }
     finally { await setup.end(); }
@@ -412,6 +547,11 @@ test('PostgreSQL hosted menu, HTTPS publication and guest browser flow', { timeo
     await page.getByRole('button', { name: 'Send feedback' }).click();
     await page.getByText('Thank you. Your feedback was sent privately.', { exact: true }).waitFor();
     await page.waitForFunction(() => document.activeElement?.textContent === 'Thank you. Your feedback was sent privately.');
+    if (RESTAURANT_TEST_SCREENSHOTS) await page.screenshot({ path: join(RESTAURANT_TEST_SCREENSHOTS, 'guest-feedback-confirmation.png') });
+    await page.getByRole('button', { name: 'Leave feedback for another receipt' }).click();
+    await page.waitForFunction(() => document.activeElement?.id === 'guest-feedback-code');
+    await page.getByRole('button', { name: 'Cancel feedback' }).click();
+    await page.waitForFunction(() => document.activeElement?.textContent === 'Leave feedback for another receipt');
     assert.equal((await sendFeedback('ranchi-cafe', response)).status, 422);
     assert.equal((await put('ranchi-cafe/feedback-codes', wire)).status, 204);
     assert.equal((await sendFeedback('ranchi-cafe', response)).status, 422);

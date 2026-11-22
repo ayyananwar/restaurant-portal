@@ -224,6 +224,8 @@ The current source build also sends `X-Outlet-Installation` on menu/photo public
 
 This protection is an unreleased step toward coordinated recovery. It does not enable hosted restores or expose an installation-switching API. Do not downgrade the local publisher to a build without the installation header after binding: its hosted requests will be rejected even though local operations still work. The existing 0.4.0 Windows ZIP has not been rebuilt with this change; publish a matched, verified kit before rollout. Do not clear the hosted binding to bypass a rejection.
 
+The source also contains a tested hosted recovery storage transaction. It permanently reserves old campaign codes, makes previous unredeemed claims unavailable, preserves redeemed history and the last published menu, and records an immutable retry checkpoint tied to the backup hash. New campaigns need new codes. It rejects changed or superseded retries, reused installation identities and exhausted publication versions. The transaction has **no HTTP route or Windows restore integration yet**; hosted restores remain blocked until the durable local journal and startup protection are complete. Once recovery records exist, never roll the hosted service back to a build lacking these retirement checks. Do not manually change hosted rows to simulate a real recovery.
+
 ## Private receipt feedback
 
 When the counter records payment on a new whole or split check, the staff app creates one feedback code for that paid receipt. Choose **Print feedback slip** before releasing the table if the receipt software cannot print the code. The slip has the code, expiry, and the guest-menu address when configured. It leaves out the receipt reference and amount.
