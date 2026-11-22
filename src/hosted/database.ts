@@ -123,6 +123,41 @@ export async function prepareHostedStore(pool: Pool) {
       PRIMARY KEY (outlet, request_id),
       UNIQUE (outlet, new_installation)
     );
+    CREATE TABLE IF NOT EXISTS online_pickup_channels (
+      outlet TEXT PRIMARY KEY REFERENCES hosted_outlets(slug),
+      installation UUID NOT NULL,
+      revision BIGINT NOT NULL CHECK (revision > 0),
+      enabled BOOLEAN NOT NULL DEFAULT false,
+      heartbeat_at TIMESTAMPTZ
+    );
+    CREATE TABLE IF NOT EXISTS online_pickup_quotes (
+      id UUID PRIMARY KEY,
+      outlet TEXT NOT NULL REFERENCES hosted_outlets(slug),
+      account_id UUID NOT NULL REFERENCES guest_accounts(id),
+      installation UUID NOT NULL,
+      channel_revision BIGINT NOT NULL,
+      menu_version BIGINT NOT NULL,
+      snapshot JSONB NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      UNIQUE (outlet, account_id)
+    );
+    CREATE INDEX IF NOT EXISTS online_pickup_quote_expiry ON online_pickup_quotes(expires_at);
+    CREATE TABLE IF NOT EXISTS online_pickup_requests (
+      id UUID PRIMARY KEY,
+      outlet TEXT NOT NULL REFERENCES hosted_outlets(slug),
+      account_id UUID NOT NULL REFERENCES guest_accounts(id),
+      request_id UUID NOT NULL,
+      quote_id UUID NOT NULL,
+      installation UUID NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending_acceptance','expired')),
+      snapshot JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      UNIQUE (outlet, account_id, request_id),
+      UNIQUE (outlet, quote_id)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS online_pickup_one_pending ON online_pickup_requests(outlet,account_id)
+      WHERE status='pending_acceptance';
   `);
 }
 

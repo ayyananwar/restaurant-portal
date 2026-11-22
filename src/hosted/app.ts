@@ -8,6 +8,7 @@ import { acceptMenu, authenticateOutlet, hasPhoto, outletFeedback, outletSlugPat
 import { addGuestAccountRoutes } from './guest-account.js';
 import type { GuestAccountOptions } from './phone-verify.js';
 import { syncOutletOffers, type OfferSync } from './offers.js';
+import { OnlineOrderingError } from './online-ordering.js';
 
 const clientDir = new URL('../client/', import.meta.url);
 const guestFile = 'guest-menu.html';
@@ -64,8 +65,9 @@ export async function buildHostedApp(pool: Pool, tls?: { key: Buffer; cert: Buff
   });
   app.setErrorHandler((error, _request, reply) => {
     const status = (error as { statusCode?: number }).statusCode ?? 500;
-    if (status >= 500) console.error('Hosted menu request failed.');
-    return reply.code(status).send({ error: status >= 500 ? 'The menu service is temporarily unavailable.' : 'The request could not be accepted.' });
+    if (status >= 500 && !(error instanceof OnlineOrderingError)) console.error('Hosted menu request failed.');
+    return reply.code(status).send({ error: error instanceof OnlineOrderingError ? error.message
+      : status >= 500 ? 'The menu service is temporarily unavailable.' : 'The request could not be accepted.' });
   });
   addGuestAccountRoutes(app, pool, accounts);
 

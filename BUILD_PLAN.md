@@ -19,7 +19,7 @@ The first single-outlet package includes **Table service**, **Counter service**,
 - Working defaults for implementation are optional customer name, **Dine-in** or **Takeaway**, one payment record per counter order, a unique token within each outlet business date, and **Collected** as the handover action. These choices need review with the first outlet before pilot sign-off.
 - A counter dine-in order may carry an optional seating label. Its lifecycle is driven by the token and collection state. Table service continues to use ownership and table release.
 - The same catalog, prices, availability, notes, coupons, dish picker, and kitchen preparation meanings apply to all three modes. Reuse the existing components and services where their behavior fits.
-- The current release uses manual payment confirmation. Payment-provider verification, online checkout, automated refunds, delivery, multi-outlet operations, and the farmer marketplace stay in the later roadmap.
+- The offline package uses manual payment confirmation. The separate online pickup/delivery package is now active development, with restaurant acceptance before payment. Multi-outlet operations and the farmer marketplace remain later scope.
 
 ### Outlet setup and mode changes
 
@@ -261,6 +261,50 @@ Recovery is part of the product, not a raw database-file upload. An older snapsh
 - [x] Verify private claim access, duplicate claim requests, and offline counter redemption. Keep real network and SMS checks in the release phase.
 - [x] Review rendered guest sign-in, offer claims, and private feedback. Verify labels, invalid verification codes, recovery, confirmation, and feedback privacy with the hosted test fixture. See [guest UI review](VERIFICATION.md#guest-ui-review-and-accessibility).
 
+## Online ordering package · active development
+
+The owner approved moving online ordering into active development on 23 November 2026. Build pickup first, then restaurant-managed delivery. The offline restaurant package must continue operating independently. Do not expose a working checkout or enable online orders until the outlet can receive requests, accept them and reconcile verified payment. Deploy at the end, after local verification.
+
+### Ordering contract and availability
+
+- [ ] Add package entitlement and owner-controlled online settings: accepting orders, opening hours, preparation estimates, pickup scheduling and temporary pause. Keep channels disabled by default. Separate a paid package entitlement from an outlet's operational pause.
+- [ ] Require an authenticated outlet connector with a fresh heartbeat and the current installation identity. Let public menu browsing continue when ordering is unavailable. Reject new requests or acceptance against an unreachable/recovering counter; never promise immediate fulfillment from a stale menu.
+- [x] Implement the backend pickup channel/heartbeat primitive, server-priced reviews and protected request APIs with authenticated account binding, bounded quantities/notes, expiry and menu/settings versions. Reject stale reviews, sold-out items, altered amounts and unsupported fields. Responses expose an item subtotal; final pricing belongs to restaurant acceptance. This is not yet connected to an owner setting, counter connector or guest cart; channels remain disabled by default.
+- [x] Persist pending restaurant requests with retry identities and original item/price snapshots. Bound pending requests to one per customer/outlet. Report unanswered requests as expired at their deadline and persist expiry on subsequent checkout. Isolate reads/writes by account and outlet; verify concurrent retries and rollback after an injected final-write failure.
+- [ ] Finish retention and cleanup for expired reviews, abandoned requests and customer contact data; document support access and recovery handling. Collect an operational contact number only through a verified, consented workflow, not by treating arbitrary typed numbers as identity.
+
+### Customer and counter workflows
+
+- [ ] Add the signed-in guest cart to the single guest menu: add/remove dishes, quantities, item notes, order notes, name, review, validation recovery and safe refresh/retry. Keep local dine-in browsing waiter-led; only entitled hosted outlets expose online actions.
+- [ ] Add an authenticated outbound counter connector, local inbox and acknowledgment protocol. Preserve requests through restart and lost responses. Display online orders separately from table checks and counter tokens; never create duplicate kitchen entries.
+- [ ] Let authorized restaurant staff accept or reject a fresh request. Record actor, revision, reason and promised pickup time. Acceptance produces an immutable final price review, including applicable taxes, discounts and fees; customers confirm changed totals before payment.
+- [ ] Add account-linked online coupons with reservation, expiry and single redemption across online/offline flows. Reconcile claims centrally before approval; an old backup or disconnected counter cannot revive a used claim.
+
+### Payment, preparation and collection
+
+- [x] Select Razorpay as the payment provider (owner confirmed). Follow its [Standard Checkout integration](https://razorpay.com/docs/payments/payment-gateway/web-integration/standard/integration-steps) and [webhook validation guidance](https://razorpay.com/docs/webhooks/validate-test). Do not treat an authorized payment as captured or a browser callback as sufficient proof of payment.
+- [x] Use platform-managed Razorpay Route with linked restaurant accounts and automatic commission splitting from launch (owner confirmed). Do not substitute direct restaurant checkout with separately invoiced commission.
+- [ ] Confirm platform Route eligibility/activation and test-mode access, onboard the restaurant's linked account, and verify settlement, fees and transfer/reversal permissions using [Razorpay's Route documentation](https://razorpay.com/docs/payments/route/). Use test credentials first; keep secrets private. No live charge or rollout is authorized by a development fixture.
+- [ ] Configure and snapshot the platform commission policy per order/outlet before checkout. Calculate platform/restaurant shares in integer paise, reconcile them to the captured customer total, record provider fees separately, and handle partial/full refunds plus transfer reversals. Confirm the actual commission rate and applicable invoicing/tax treatment before launch.
+- [ ] Create payment orders only for accepted, unexpired restaurant orders. Verify provider signatures/webhooks, amount, currency, account, order identity and replay protection on the server. A customer callback alone is not payment proof.
+- [ ] Handle delayed, failed and duplicate payments, expired acceptance, a lost successful response and payment received after cancellation. Reconcile before preparation; never silently discard received funds or record payment twice.
+- [ ] Route verified paid orders into the existing kitchen with explicit online origin and retained notes. Integrate built-in/external billing, per-dish progress, ready-for-pickup status and an audited collection action with private collection verification.
+- [ ] Implement rejection/cancellation rules and partial/full refunds with provider-confirmed outcomes, original invoice/credit-note history and visible unresolved cases. Keep physical cash/POS refunds distinct from online provider refunds.
+- [ ] Show customer history and status: waiting for restaurant, rejected/expired, awaiting payment, payment under verification, paid/preparing, ready and collected/cancelled/refund pending. Preserve access without exposing another customer's order.
+
+### Restaurant-managed delivery
+
+- [ ] Add restaurant-drawn delivery boundaries, coordinate validation, address/contact entry, delivery fees, minimum spend and pickup-versus-delivery choice. Recheck the zone and immutable total before acceptance/payment.
+- [ ] Add delivery scheduling, employee assignment, ready/out-for-delivery/delivered statuses and audited failed-delivery handling. Keep customer addresses off public menus, kitchen tokens and unrelated staff screens.
+- [ ] Add customer delivery updates and history. Delivery booking with the platform's own fleet remains a subsequent integration after restaurant-managed delivery works.
+
+### Integration and release gates
+
+- [ ] Complete the recovery journal/startup gates from Phase 2C. Recovery must pause ordering, invalidate older reviews, expire untouched pending requests and fence the old connector. Reconcile accepted/paid requests and financial outcomes before resuming; never reset paid online orders from an older local backup.
+- [ ] Test API permissions, cross-outlet/account access, malformed inputs, price changes, stale settings, disabled/offline channels, request expiry, simultaneous checkout, duplicate/lost requests, payment/webhook replay, refunds, reconnect, restart and failure after external payment.
+- [ ] Review guest/counter/kitchen flows at 320/390/768/1280 px with keyboard, touch and accessibility checks. Preserve the current design system and avoid a second cart/order implementation where existing components fit.
+- [ ] Run end-to-end pickup and delivery tests with a simulated provider and disposable PostgreSQL/SQLite. Then perform test-mode provider checks, configured-deployment security review and the deferred physical walkthrough. Package matched local/hosted builds and deploy only after sign-off.
+
 ## Phase 5 · Release candidate
 
 - [x] Apply the supplied staff UI references and verify the desktop and phone-sized browser workflows. Record adaptations for live data and staff permissions. See [staff redesign verification](VERIFICATION.md#staff-reference-redesign).
@@ -287,4 +331,4 @@ Recovery is part of the product, not a raw database-file upload. An older snapsh
 | Hosted data | Test cross-outlet access to every protected resource. Scope and rotate installation credentials. Validate inputs and uploads, limit abuse, keep secrets and customer data out of logs, and minimize what syncs. |
 | Release | Verify dependency and build integrity, review access control and failure cases, and run targeted staged security testing against applicable [OWASP ASVS requirements](https://owasp.org/www-project-application-security-verification-standard/). |
 
-Later scope includes online pickup and delivery, integrated payments, delivery booking, multi-outlet operations, and the farmer marketplace.
+Online pickup and restaurant-managed delivery are active scope above. Later scope includes platform delivery booking, multi-outlet operations, and the farmer marketplace.

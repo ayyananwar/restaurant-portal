@@ -4,6 +4,8 @@ import type { Pool } from 'pg';
 import type { GuestAccountOptions } from './phone-verify.js';
 import { outletSlugPattern } from './database.js';
 import { claimOffer, readGuestOffers } from './offers.js';
+import { quotePickup, readPickup, submitPickup } from './online-ordering.js';
+import type { PickupCart } from '../shared/online-ordering.js';
 
 const cookie = '__Host-guest_session';
 const cookieFlags = 'Path=/; Secure; HttpOnly; SameSite=Lax';
@@ -84,6 +86,37 @@ export function addGuestAccountRoutes(app: FastifyInstance, pool: Pool, options?
   }
 
   const outletParams = body({ slug: { type: 'string', pattern: outletSlugPattern } });
+  const uuid = { type: 'string', pattern: '^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$' };
+  app.post<{ Params: { slug: string }; Body: PickupCart }>('/api/online-pickup/:slug/quote', {
+    onRequest: allowWrite, bodyLimit: 65_536, schema: { params: outletParams, body: body({
+      name: { type: 'string', minLength: 1, maxLength: 100 }, notes: { type: 'string', maxLength: 500 },
+      lines: { type: 'array', minItems: 1, maxItems: 50, items: body({
+        menuId: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+        quantity: { type: 'integer', minimum: 1, maximum: 20 }, note: { type: 'string', maxLength: 250 }
+      }) }
+    }) }
+  }, async (request, reply) => {
+    const token = sessionHash(request);
+    const id = await accountId(token);
+    if (!id) return fail(reply, 401, 'Sign in with your phone to order.');
+    if (!(await useLimit(pool, `pickup-quote:${id}`, 30, 900))) return fail(reply, 429, 'Too many order reviews. Try again later.');
+    return quotePickup(pool, request.params.slug, token, request.body);
+  });
+  app.post<{ Params: { slug: string }; Body: { requestId: string; quoteId: string } }>('/api/online-pickup/:slug/requests', {
+    onRequest: allowWrite, bodyLimit: 512, schema: { params: outletParams, body: body({ requestId: uuid, quoteId: uuid }) }
+  }, async (request, reply) => {
+    const token = sessionHash(request);
+    const id = await accountId(token);
+    if (!id) return fail(reply, 401, 'Sign in with your phone to order.');
+    if (!(await useLimit(pool, `pickup-submit:${id}`, 60, 900))) return fail(reply, 429, 'Too many requests. Check your order before retrying.');
+    return submitPickup(pool, request.params.slug, token, request.body.requestId, request.body.quoteId);
+  });
+  app.get<{ Params: { slug: string; id: string } }>('/api/online-pickup/:slug/requests/:id', {
+    schema: { params: body({ slug: { type: 'string', pattern: outletSlugPattern }, id: uuid }) }
+  }, async (request, reply) => {
+    if (request.headers.host !== host) return fail(reply, 403, 'Open the guest menu and try again.');
+    return readPickup(pool, request.params.slug, sessionHash(request), request.params.id);
+  });
   app.get<{ Params: { slug: string } }>('/api/guest-offers/:slug', { schema: { params: outletParams } }, (request, reply) => {
     if (request.headers.host !== host) return fail(reply, 403, 'Open the guest menu and try again.');
     return readGuestOffers(pool, request.params.slug, sessionHash(request));

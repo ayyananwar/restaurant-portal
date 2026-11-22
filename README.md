@@ -47,6 +47,10 @@ To provision an empty real outlet, use a new database path and `npm.cmd run setu
 
 Owners change the service mode under **Outlet overview → Change service mode**. Existing open orders remain available for completion. Owners can require counter approval for changes after preparation starts or block those changes.
 
+## Online ordering development
+
+Online ordering is now active development as a separate package. The current source includes protected, server-priced pickup review and pending-request APIs with expiry and duplicate-safe submission. Channels are disabled by default and require a fresh authenticated counter heartbeat. There is no customer cart, counter acceptance connector, online payment or delivery checkout yet; do not enable a channel by editing hosted database rows. These APIs record requests awaiting restaurant acceptance, not paid orders, and do not send work to the kitchen. The [online package checklist](BUILD_PLAN.md#online-ordering-package--active-development) tracks the remaining implementation and tests.
+
 ## Counter orders
 
 1. Sign in as billing and open **Counter orders → New counter order**. Choose Dine-in or Takeaway, enter optional handover details, and select dishes.
