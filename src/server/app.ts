@@ -8,6 +8,8 @@ import { reopenSplit, saveSplit } from './check-splits.js';
 import { quoteBuiltInBill, quoteCoupon, recordBuiltInBill, recordReceipt, releaseTable } from './receipt-handoff.js';
 import { readBillingProfile, saveBillingProfile } from './billing.js';
 import { billingProfileSchema } from '../shared/billing.js';
+import { onlineInbox, queueOnlineDecision, setOnlineEnabled, type OnlineConnector } from './online-connector.js';
+import type { PickupDecision } from '../shared/online-ordering.js';
 import type { BillBuyer, BillingProfile, BuiltInBillRequest } from '../shared/contracts.js';
 import { createCoupon, readCouponRedemptions, readCoupons, setCouponEnabled } from './coupons.js';
 import { correctReadyDish, requestDishChange, resolveDishChange } from './order-changes.js';
@@ -96,6 +98,7 @@ export function buildApp(db: DatabaseSync, options: {
   tls?: { key: Buffer; cert: Buffer };
   logger?: boolean;
   publication?: ReturnType<typeof publicationTarget>;
+  online?: OnlineConnector;
   tableQrPreview?: string;
 }) {
   const origin = new URL(options.origin);
@@ -154,6 +157,7 @@ export function buildApp(db: DatabaseSync, options: {
     if (role && staff.role !== role) throw new WorkflowError(403, 'This account cannot do that.');
     return staff;
   }
+  function onlineStaff(request:FastifyRequest){const staff=requireStaff(request);if(!['admin','billing'].includes(staff.role))throw new WorkflowError(403,'Only owner and billing staff can view online requests.');return staff;}
 
   app.addHook('preHandler',async request=>{
     if(request.method==='GET'||request.method==='HEAD')return;
@@ -267,7 +271,25 @@ export function buildApp(db: DatabaseSync, options: {
   });
 
   app.put<{Body:BillingProfile}>('/api/outlet/billing', { schema: { body: billingProfileSchema } },
-    (request,reply)=>{saveBillingProfile(db,requireStaff(request,'admin'),request.body);return reply.code(204).send();});
+    (request,reply)=>{const owner=requireStaff(request,'admin');if(!request.body.enabled&&db.prepare('SELECT enabled FROM online_connector WHERE id=1').get()?.enabled)throw new WorkflowError(409,'Pause online pickup before disabling billing.');saveBillingProfile(db,owner,request.body);return reply.code(204).send();});
+
+  const onlineId={type:'object',properties:{id:{type:'string',pattern:'^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$'}},required:['id']};
+  app.get('/api/online-orders',request=>{onlineStaff(request);return onlineInbox(db,options.publication);});
+  app.post('/api/online-orders/refresh',async(request,reply)=>{onlineStaff(request);if(!options.publication||!options.online)throw new WorkflowError(409,'The hosted outlet connection is not configured.');options.online.kick();return reply.code(202).send({scheduled:true});});
+  app.put<{Body:{enabled:boolean;revision:number}}>('/api/outlet/online',{schema:{body:{type:'object',additionalProperties:false,
+    required:['enabled','revision'],properties:{enabled:{type:'boolean'},revision:integerId}}}},(request,reply)=>{
+    setOnlineEnabled(db,requireStaff(request,'admin'),request.body.enabled,request.body.revision,options.publication);options.online?.kick();return reply.code(204).send();
+  });
+  app.post<{Params:{id:string};Body:{revision:number}}>('/api/online-orders/:id/review',{schema:{params:onlineId,body:{type:'object',additionalProperties:false,required:['revision'],properties:{revision:integerId}}}},async request=>{
+    onlineStaff(request);if(!options.online)throw new WorkflowError(409,'The online connector is unavailable.');
+    const review=await options.online.review(request.params.id,request.body.revision);onlineStaff(request);return review;
+  });
+  app.post<{Params:{id:string};Body:Omit<PickupDecision,'actor'>}>('/api/online-orders/:id/decision',{schema:{params:onlineId,body:{type:'object',additionalProperties:false,
+    required:['requestId','expectedRevision','decision','reason','readyAt','reviewHash'],properties:{requestId:{type:'string',pattern:'^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$'},
+      expectedRevision:integerId,decision:{enum:['accept','reject']},reason:{type:'string',maxLength:500,pattern:'^[^\\u0000]*$'},
+      readyAt:{anyOf:[{type:'integer',minimum:1,maximum:8_640_000_000_000_000},{type:'null'}]},reviewHash:{anyOf:[reviewHashSchema,{type:'null'}]}}}}},(request,reply)=>{
+    const result=queueOnlineDecision(db,onlineStaff(request),request.params.id,request.body,options.publication);options.online?.kick();return reply.code(202).send(result);
+  });
 
   app.get<{Querystring:{offset?:string;search?:string}}>('/api/bills',{schema:{querystring:{
     type:'object',additionalProperties:false,properties:{offset:{type:'string',pattern:'^(0|[1-9][0-9]{0,6})$'},search:{type:'string',maxLength:32}}

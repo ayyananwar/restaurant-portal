@@ -103,6 +103,7 @@ export async function prepareHostedStore(pool: Pool) {
     );
     CREATE INDEX IF NOT EXISTS outlet_offer_account ON outlet_offer_claims (outlet, account_id, claimed_at DESC);
     ALTER TABLE hosted_outlets ADD COLUMN IF NOT EXISTS publication_installation UUID;
+    ALTER TABLE hosted_outlets ADD COLUMN IF NOT EXISTS online_pickup_entitled BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE outlet_offer_claims ADD COLUMN IF NOT EXISTS invalidated_at TIMESTAMPTZ;
     DROP INDEX IF EXISTS outlet_offer_pending;
     CREATE INDEX IF NOT EXISTS outlet_offer_pending_live ON outlet_offer_claims (outlet, claimed_at, code)

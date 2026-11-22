@@ -4,6 +4,7 @@ import { buildApp } from './app.js';
 import { publicationTarget, startMenuPublisher } from './menu-publication.js';
 import { openStore } from './store.js';
 import { tableQrPreviewUrl } from './table-qr.js';
+import { createOnlineConnector } from './online-connector.js';
 
 const host = process.env.RESTAURANT_BIND ?? '127.0.0.1';
 const port = Number(process.env.RESTAURANT_PORT ?? '3100');
@@ -34,20 +35,23 @@ try {
 } catch {
   console.error('Table card preview is disabled. Check the loopback guest menu URL.');
 }
+const online=createOnlineConnector(db,publication);
 const app = buildApp(db, {
   origin: origin.origin,
   sampleArtwork: process.env.RESTAURANT_SAMPLE_ARTWORK === '1',
   tls: key && cert ? { key: readFileSync(key), cert: readFileSync(cert) } : undefined,
   publication,
+  online,
   tableQrPreview
 });
 let stopPublisher: ReturnType<typeof startMenuPublisher> | undefined;
 app.addHook('onClose', async () => {
-  await stopPublisher?.();
+  await Promise.all([stopPublisher?.(),online.stop()]);
   db.close();
 });
 await app.listen({ host, port });
 if (publication) stopPublisher = startMenuPublisher(db, publication);
+if (publication) online.start();
 console.log(`Restaurant portal is running at ${origin.origin}`);
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => void app.close());

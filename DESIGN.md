@@ -62,6 +62,8 @@ Recheck contrast in rendered states, including hover, focus, and any alpha blend
 
 ## Layout
 
+Online pickup is a counter subworkspace, with a separate request list and selected request. Keep the six admin navigation destinations; owners enter through an action in Outlet overview. Reuse the navy/ivory controls, status badges, field groups and protected-edit behavior. Distinguish local Wi-Fi connection, hosted availability, requested activation/pause and confirmed settings. A queued decision must say it is saved on this PC and awaiting hosted confirmation. Show the original customer estimate separately from the reviewed total; use explicit tax-included/tax-added labels and India time. Never present restaurant acceptance as payment or kitchen preparation. Closing a decision form restores focus to the request heading, and navigation remains locked while editing.
+
 Use a spacing scale of 4, 8, 12, 16, 24, and 32 px. Start with 16 px phone gutters and 24–32 px on wider screens. Test width breakpoints with real menu names and enlarged text.
 
 | Width | Staff layout |

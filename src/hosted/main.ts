@@ -17,7 +17,7 @@ if (!connectionString || !Number.isInteger(port) || port < 1 || port > 65535
 const pool = hostedPool(connectionString);
 pool.on('error', () => console.error('Hosted database connection interrupted.'));
 try {
-  await pool.query('SELECT publication_installation FROM hosted_outlets LIMIT 0');
+  await pool.query('SELECT publication_installation,online_pickup_entitled FROM hosted_outlets LIMIT 0');
   await pool.query('SELECT invalidated_at FROM outlet_offer_claims LIMIT 0');
   await pool.query('SELECT 1 FROM outlet_retired_offers, outlet_recoveries LIMIT 0');
   await pool.query('SELECT 1 FROM online_pickup_channels,online_pickup_quotes,online_pickup_requests LIMIT 0');

@@ -52,6 +52,15 @@ export async function connectorPickup(pool: Pool, slug: string, id: string, leas
   return outletWrite(pool, slug, async client => requestView(await orderFor(client, slug, id)), lease);
 }
 
+export async function reconcilePickup(pool: Pool, slug: string, ids: string[], lease: PublicationLease) {
+  requireConnector(lease);
+  return outletWrite(pool, slug, async client => {
+    const { rows } = await client.query<RequestRow>('SELECT *,expires_at<=clock_timestamp() AS expired FROM online_pickup_requests WHERE outlet=$1 AND id=ANY($2::uuid[])', [slug,ids]);
+    const found=new Set(rows.map(row=>row.id));
+    return {requests:rows.map(requestView),missing:ids.filter(id=>!found.has(id))};
+  }, lease);
+}
+
 function requirePending(row: RequestRow, revision: number, installation?: string) {
   if (row.installation !== installation || row.status !== 'pending_acceptance' || row.expired || Number(row.revision) !== revision) {
     throw fail(409, 'This request changed or expired. Refresh the inbox before deciding.');
@@ -72,7 +81,7 @@ async function priceReview(client: PoolClient, slug: string, row: RequestRow): P
   const amounts = billAmounts(subtotalPaise, 0, profile, profile.stateCode);
   if (!Number.isSafeInteger(subtotalPaise) || subtotalPaise < 0 || amounts.totalPaise > 99_999_999_999) throw fail(400, 'This order exceeds the supported amount.');
   const { legalName, address, stateCode, gstin, taxMode, rateBasisPoints, pricesIncludeTax, classification, revision, testMode } = profile;
-  const review = { currency: 'INR' as const, revision: Number(row.revision), lines, subtotalPaise, discountPaise: 0, feesPaise: 0, amounts,
+  const review = { orderId:row.id, currency: 'INR' as const, revision: Number(row.revision), lines, subtotalPaise, discountPaise: 0, feesPaise: 0, amounts,
     seller: { legalName, address, stateCode, gstin, taxMode, rateBasisPoints, pricesIncludeTax, classification, revision, testMode } };
   return { ...review, hash: hash({ orderId: row.id, installation: row.installation, menuVersion: channel.version, profile, review }) };
 }

@@ -25,6 +25,7 @@ test('restaurant pickup decisions are fresh, priced, audited, retry-safe and fen
     await setup.query(`CREATE SCHEMA ${namespace}`);
     await prepareHostedStore(pool);
     await provisionOutlet(pool, 'cafe', 'Café', 'classic', token);
+    await pool.query("UPDATE hosted_outlets SET online_pickup_entitled=true WHERE slug='cafe'");
     const otherToken = randomBytes(32).toString('hex');
     const otherInstallation = randomUUID();
     await provisionOutlet(pool, 'other', 'Other', 'classic', otherToken);

@@ -5,7 +5,7 @@ import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSy
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
-import { backup as nativeBackup } from 'node:sqlite';
+import { backup as nativeBackup, DatabaseSync } from 'node:sqlite';
 import { authenticate, billableLines, checkVersion, openStore, readReceipts, submitOrder } from '../dist/server/store.js';
 import { quoteBuiltInBill, recordBuiltInBill } from '../dist/server/receipt-handoff.js';
 import { createEncryptedBackup, inspectEncryptedBackup, restoreInspectedBackup } from '../dist/server/recovery.js';
@@ -16,6 +16,28 @@ import { startMenuPublisher } from '../dist/server/menu-publication.js';
 
 assert.equal(typeof nativeBackup,'function','Use the bundled runtime or Node >=22.16 for recovery tests.');
 const password='fixture-only long recovery passphrase';
+test('version-19 backups migrate after authentication and connector history blocks uncoordinated restore',async()=>{
+  const f=fixture();
+  try{
+    const legacyPath=join(f.directory,'legacy.sqlite');await nativeBackup(f.db,legacyPath);
+    const legacy=new DatabaseSync(legacyPath);
+    legacy.exec('DROP TABLE online_decisions;DROP TABLE online_inbox;DROP TABLE online_connector;PRAGMA user_version=19;');
+    const exported=await createEncryptedBackup(legacy,password,f.directory);legacy.close();
+    assert.equal(exported.manifest.schema,19);
+    const inspected=await inspectEncryptedBackup(exported.path,password,f.directory);
+    const destination=join(f.directory,'upgraded.sqlite');
+    await restoreInspectedBackup(inspected,destination,{confirmHash:inspected.manifest.sha256,invoiceSeries:'R9',creditSeries:'C9',operator:'fixture',hostedConfigured:false});
+    const restored=openStore(destination);
+    try{assert.equal(restored.prepare('PRAGMA user_version').get().user_version,20);assert.equal(restored.prepare('SELECT count(*) AS n FROM online_connector').get().n,1);}
+    finally{restored.close();}
+    await inspected.cleanup();await exported.cleanup();
+    f.db.prepare('UPDATE online_connector SET destination=? WHERE id=1').run('https://fixture.example/api/publish/cafe');
+    const linked=await createEncryptedBackup(f.db,password,f.directory);const linkedInspection=await inspectEncryptedBackup(linked.path,password,f.directory);
+    await assert.rejects(restoreInspectedBackup(linkedInspection,join(f.directory,'blocked.sqlite'),{confirmHash:linkedInspection.manifest.sha256,
+      invoiceSeries:'RA',creditSeries:'CA',operator:'fixture',hostedConfigured:false}),/coordinated recovery/);
+    await linkedInspection.cleanup();await linked.cleanup();
+  }finally{f.cleanup();}
+});
 function fixture() {
   const directory=mkdtempSync(join(tmpdir(),'restaurant-recovery-'));
   const path=join(directory,'outlet.sqlite');

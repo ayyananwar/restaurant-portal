@@ -21,6 +21,7 @@ import { TableQrCards } from './table-qr-cards.js';
 import { CouponManager } from './coupon-manager.js';
 import { PrivateFeedback } from './private-feedback.js';
 import { CounterOrders } from './counter-orders.js';
+import { OnlineOrders } from './online-orders.js';
 import { OutletSettings } from './outlet-settings.js';
 import { TableResolution } from './table-resolution.js';
 import { ArrowRight, BookOpen, ChefHat, ClipboardList, ConciergeBell, Grid2X2, House, LockKeyhole, LogOut, MessageSquareText, Plus, QrCode, Search, Ticket, UserRound, UsersRound, Eye, EyeOff, Check, CirclePlay } from 'lucide-react';
@@ -105,7 +106,7 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
   const [busy, setBusy] = useState(false);
   const [tableId, setTableId] = useState<number | null>(null);
   const [paperEntry, setPaperEntry] = useState<PaperOrderDetails | 'setup' | null>(null);
-  const [workspaceView, setWorkspaceView] = useState<(typeof adminPages)[number]['id']>(null);
+  const [workspaceView, setWorkspaceView] = useState<(typeof adminPages)[number]['id']|'online'>(null);
   const [workspaceEdit, setWorkspaceLocked] = useState(false);
   const [billingEdits, setBillingEdits] = useState<Set<string>>(() => new Set());
   const setBillingLock = useCallback((id: string, active: boolean) => setBillingEdits(current => {
@@ -118,7 +119,7 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
   const [listView, setListView] = useState(false);
   const [counterTab, setCounterTab] = useState<'open' | 'paid'>('open');
   const [counterTable, setCounterTable] = useState<number>();
-  const [billingView, setBillingView] = useState<'table' | 'counter'>(initial.settings.mode === 'counter' ? 'counter' : 'table');
+  const [billingView, setBillingView] = useState<'table' | 'counter' | 'online'>(initial.settings.mode === 'counter' ? 'counter' : 'table');
   const version = useRef(0);
   const onSignOut = useRef(onSignedOut);
   onSignOut.current = onSignedOut;
@@ -129,8 +130,8 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
 
   useEffect(() => {
     if (workspaceLocked || tableId !== null || paperEntry) return;
-    if (service.settings.mode === 'counter' && !service.tables.some(table => table.orderId !== null)) setBillingView('counter');
-  }, [service.settings.mode, service.tables, workspaceLocked, tableId, paperEntry]);
+    if (billingView!=='online'&&service.settings.mode === 'counter' && !service.tables.some(table => table.orderId !== null)) setBillingView('counter');
+  }, [service.settings.mode, service.tables, workspaceLocked, tableId, paperEntry,billingView]);
 
   useEffect(() => {
     if (!workspaceLocked) return;
@@ -200,12 +201,13 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
   const isAdmin = staff.role === 'admin';
   const currentPage = adminPages.find(page => page.id === workspaceView);
   const title = currentTable && !paper ? (currentTable.orderId ? 'Order details' : 'Take order')
+    : workspaceView==='online'||staff.role==='billing'&&billingView==='online'?'Online orders'
     : workspaceView === 'menu' && staff.role === 'kitchen' ? 'Dish availability'
     : staff.role === 'billing' && billingView === 'counter' ? 'Counter orders'
     : isAdmin ? currentPage?.label ?? roleLabels.admin : roleLabels[staff.role];
   function returnToOverview() {
     setWorkspaceView(null);
-    const trigger = isAdmin ? currentPage?.trigger : 'menu-catalog-trigger';
+    const trigger = isAdmin ? workspaceView==='online'?'online-orders-trigger':currentPage?.trigger : 'menu-catalog-trigger';
     if (trigger) window.requestAnimationFrame(() => {
       const button = document.getElementById(trigger);
       if (button instanceof HTMLButtonElement && !button.disabled) button.focus();
@@ -222,6 +224,7 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
   const selectedCheck = counterChecks.find(table => table.id === counterTable) ?? counterChecks[0];
   const billingDashboard = staff.role === 'billing' && !paperEntry && !currentTable;
   const showCounter = staff.role === 'billing' && billingView === 'counter' && !paperEntry && !currentTable;
+  const showOnline = staff.role === 'billing' && billingView === 'online' && !paperEntry && !currentTable;
   const counterAccessible = service.settings.mode !== 'table' || service.counterOrders.some(order =>
     !['collected','cancelled'].includes(order.status) || (order.refund && !order.refund.reference));
   const tableAccessible = service.settings.mode !== 'counter' || occupied > 0;
@@ -237,7 +240,7 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
             disabled={!connected} onClick={() => setWorkspaceView('menu')}><ConciergeBell aria-hidden="true" />Dish availability</button>}
         </nav>
       </aside>}
-    <main className={`workspace${billingDashboard && !showCounter ? ' counter-workspace' : ''}`}>
+    <main className={`workspace${billingDashboard && !showCounter && !showOnline ? ' counter-workspace' : ''}`}>
     <header className="topbar">
       <div>
         <p className="eyebrow">Restaurant portal</p>
@@ -266,7 +269,7 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
     </div>
     {isAdmin && <nav className="overview-actions" aria-label="Outlet navigation">
       {adminPages.map(({ id, label, trigger, icon: Icon }) => <Button key={trigger} id={trigger} type="button" variant="outline"
-        aria-current={workspaceView === id ? 'page' : undefined}
+        aria-current={workspaceView === id || id===null&&workspaceView==='online' ? 'page' : undefined}
         disabled={workspaceView !== id && (workspaceLocked || (!connected && id !== null))}
         onClick={() => {
           if (workspaceView === id) return;
@@ -278,19 +281,23 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
     {service.recovery?.pending&&<p className="error" role="alert">This outlet was restored from a backup. Service changes are paused until the owner reconciles orders, payments and refunds in Outlet overview.</p>}
     {error && <p role="alert" className="error">{error}</p>}
     {(staff.role === 'billing' || (isAdmin && workspaceView === null)) && <BillHistory connected={connected} />}
+    {isAdmin&&workspaceView===null&&<div className="actions"><Button id="online-orders-trigger" disabled={workspaceLocked||!connected} onClick={()=>setWorkspaceView('online')}>Online orders</Button></div>}
     {staff.role === 'billing' && !paperEntry && !currentTable && <div className="actions counter-actions" aria-label="Service workspaces" role="group">
       {(tableAccessible || billingView === 'table') && <Button variant={billingView === 'table' ? 'default' : 'outline'} aria-pressed={billingView === 'table'}
         disabled={workspaceLocked} onClick={() => setBillingView('table')}>Table checks</Button>}
       {(counterAccessible || billingView === 'counter') && <Button variant={billingView === 'counter' ? 'default' : 'outline'} aria-pressed={billingView === 'counter'}
         disabled={workspaceLocked} onClick={() => setBillingView('counter')}>Counter orders</Button>}
+      <Button variant={billingView==='online'?'default':'outline'} aria-pressed={billingView==='online'} disabled={workspaceLocked} onClick={()=>setBillingView('online')}>Online orders</Button>
     </div>}
-    {workspaceView === 'activity' ? <WaiterActivity onClose={returnToOverview} />
+    {workspaceView==='online'?<OnlineOrders connected={connected} owner={isAdmin} onClose={returnToOverview}/>
+      : workspaceView === 'activity' ? <WaiterActivity onClose={returnToOverview} />
       : workspaceView === 'feedback' ? <PrivateFeedback onClose={returnToOverview} />
       : workspaceView === 'coupons' ? <CouponManager connected={connected} onClose={returnToOverview} onEditChange={setWorkspaceLocked} />
       : workspaceView === 'qr' ? <TableQrCards tables={tables} destination={service.tableQr} connected={connected} onClose={returnToOverview} />
       : workspaceView === 'menu' ? <MenuCatalog menu={menu} canEdit={isAdmin} connected={connected} onRefresh={refresh}
         publication={service.publication} samplePhotos={samplePhotos} onClose={returnToOverview}
         onEditChange={isAdmin ? setWorkspaceLocked : undefined} />
+      : showOnline ? <OnlineOrders connected={connected} owner={false}/>
       : showCounter ? <CounterOrders service={service} connected={connected} onRefresh={refresh} onEditChange={setWorkspaceLocked} />
       : paperEntry === 'setup' ? <PaperOrderSetup tables={tables} waiters={waiters} connected={connected}
       onStart={(id, details) => { setPaperEntry(details); setTableId(id); }}

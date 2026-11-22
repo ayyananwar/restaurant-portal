@@ -32,6 +32,7 @@ test('online pickup reviews and pending requests are priced, isolated, retry-saf
     await provisionOutlet(pool, 'cafe', 'Pickup Café', 'classic', token);
     const otherToken = randomBytes(32).toString('hex');
     await provisionOutlet(pool, 'other', 'Other Café', 'classic', otherToken);
+    await pool.query('UPDATE hosted_outlets SET online_pickup_entitled=true');
     for (const [id, cookie] of [[account, session], [secondAccount, secondSession]]) {
       await pool.query('INSERT INTO guest_accounts(id,phone_key,phone_last_four) VALUES($1,$2,$3)', [id, randomBytes(32).toString('hex'), '1111']);
       await pool.query("INSERT INTO guest_sessions(token_hash,account_id,expires_at) VALUES($1,$2,clock_timestamp()+interval '1 hour')", [sessionHash(cookie), id]);

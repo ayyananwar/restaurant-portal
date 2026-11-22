@@ -12,6 +12,7 @@ Restaurant Portal is a single-outlet restaurant service system in active develop
 | Distribution | Windows installer packaging and a separate hosted guest service |
 | Built-in billing · development | Non-GST receipts, GST invoices, bills of supply, saved-bill search, counter credit notes and native receipt/A4 printing |
 | Recovery · development | Manual encrypted export, offline unlinked-outlet restoration, preserved access/numbering boundaries and owner review before service resumes |
+| Online pickup · development | Counter request inbox, reviewed acceptance/rejection, saved decision queue, hosted acknowledgments and owner pause/activation controls; customer checkout and payments remain unfinished |
 
 The code has been tested with local browser and service fixtures. One iQOO phone/Windows table-order, kitchen, billing and table-release walkthrough passed with the user. The outlet pilot still needs a second physical phone, outage and reboot checks, a physical printer, the selected billing product, production staging, and real SMS delivery.
 
@@ -20,6 +21,8 @@ Version 0.2.0 adds Table service, pay-first Counter service, and Both as outlet 
 Version 0.3.0 adds built-in billing, invoice history, counter credit notes and native receipt/A4 printing. Its Windows kit passed isolated installation, invoice persistence, update and rollback checks. See [the verification log](VERIFICATION.md#windows-billing-package-030--23-november-2026) for exact scope and remaining pilot gates. This is an ongoing development project, not a production deployment.
 
 Version 0.4.0 adds [encrypted backup and controlled recovery](#backups-and-recovery--040), with explicit gates for staff access, invoice series and owner reconciliation. Development and recovery commands require Node 22.16 or newer; use the bundled runtime for a consistent Windows environment. Physical recovery and coordinated hosted recovery remain required before pilot sign-off.
+
+The current **0.5.0 development source uses schema 20** for the online connector. The verified 0.4.0 Windows archive remains frozen at schema 19; it has not been rebuilt for this milestone. Do not point that older kit at an upgraded database. Supported version-19 encrypted backups can be authenticated and migrated by the development recovery tool; all hosted/online restore gates still apply. A new matched release kit and its installation/rollback checks remain pending.
 
 ### Built-in bills in the current development build
 
@@ -49,9 +52,20 @@ Owners change the service mode under **Outlet overview → Change service mode**
 
 ## Online ordering development
 
-Online ordering is now active development as a separate package. The current source includes protected pickup review/request APIs and hosted restaurant acceptance/rejection APIs. The restaurant reviews current item prices and its saved billing profile; accepted totals, taxes and pickup times are retained with audited decisions and safe retries. Channels are disabled by default and require a fresh authenticated counter heartbeat. The local Windows connector, customer cart, counter decision screens, online payment and delivery checkout are not connected yet; do not enable a channel by editing hosted database rows. An accepted request is awaiting customer payment, never a paid order or a kitchen job. The [online package checklist](BUILD_PLAN.md#online-ordering-package--active-development) tracks the remaining implementation and tests.
+Online ordering is active development as a separate package. The Windows counter now has **Online orders** beside Table checks and Counter orders. Owners open it from **Outlet overview → Online orders**. The inbox supports current-price review, acceptance with an India-time pickup promise, and rejection with a reason. A decision is saved locally first and clearly labelled as queued until the hosted service confirms it. Customer cart, online payment, automatic commission splitting and delivery checkout remain unfinished; this is not a production checkout. An accepted request is awaiting customer payment, never a paid order or a kitchen job. The [online package checklist](BUILD_PLAN.md#online-ordering-package--active-development) tracks the remaining implementation and tests.
 
-The connector can page through active requests and query a known request individually to reconcile a rejection, expiry or another counter's decision. Poll all pages, then restart from the first page on the next cycle; do not treat absence from an active page as cancellation. Only the authenticated connector can publish pricing or submit decisions; the future local service must derive the actor from its owner/billing session. Guest responses omit staff attribution and account identifiers. Hosted recovery preserves accepted prices and flags those requests for financial review, while expiring untouched pending requests. No Razorpay payment or transfer is created at this stage.
+The connector pages through active requests and reconciles known IDs in bounded batches to retrieve rejection, expiry or another counter's decision. It restarts from the first page after each complete cycle; absence from an active page is not cancellation. Only the authenticated connector can publish pricing or submit decisions; the local service derives the actor from its owner/billing session. Guest responses omit staff attribution and account identifiers. Hosted recovery preserves accepted prices and flags those requests for financial review, while expiring untouched pending requests. No Razorpay payment or transfer is created at this stage.
+
+The connector uses the existing private `RESTAURANT_PUBLISH_*` configuration. It runs on the Windows counter, not staff phones, and never sends the installation secret to the browser. It saves the destination, request revisions and original decision payloads in SQLite. After a lost response it retries the same identity. A stale decision or an operator access change stays visible for review. Requests and existing financial records are retained; the screen shows up to 200 entries, prioritizing recovery cases and the oldest waiting requests before accepted/recent closed work. Retention and broader history controls remain on the plan.
+
+Activation has two separate controls. The platform operator grants the hosted package entitlement using database administration credentials; the owner then enables online pickup in the staff screen after configuring billing. For an authorized disposable development outlet, apply the hosted schema and grant its entitlement with:
+
+```powershell
+npm.cmd run setup:hosted -- --schema-only
+npm.cmd run setup:hosted -- --online-pickup ranchi-cafe enable
+```
+
+Use `disable` to revoke the package entitlement. Granting an entitlement alone does not enable the outlet or create a Razorpay account. Do not enable real customer ordering until the remaining checkout/payment and release gates pass. Owner pause and activation remain pending until acknowledged by the host. New online requests stop when the last hosted heartbeat lease expires; local table and counter service continue. The existing PC/phone sample deliberately has no hosted target and keeps online pickup disabled.
 
 ## Counter orders
 

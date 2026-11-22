@@ -8,8 +8,8 @@ import { acceptMenu, authenticateOutlet, hasPhoto, outletFeedback, outletSlugPat
 import { addGuestAccountRoutes } from './guest-account.js';
 import type { GuestAccountOptions } from './phone-verify.js';
 import { syncOutletOffers, type OfferSync } from './offers.js';
-import { OnlineOrderingError } from './online-ordering.js';
-import { connectorPickup, decidePickup, pickupInbox, reviewPickup, syncPickupPricing } from './pickup-acceptance.js';
+import { OnlineOrderingError, syncPickupChannel } from './online-ordering.js';
+import { connectorPickup, decidePickup, pickupInbox, reconcilePickup, reviewPickup, syncPickupPricing } from './pickup-acceptance.js';
 import { billingProfileSchema } from '../shared/billing.js';
 import type { BillingProfile } from '../shared/contracts.js';
 import type { PickupDecision } from '../shared/online-ordering.js';
@@ -85,6 +85,15 @@ export async function buildHostedApp(pool: Pool, tls?: { key: Buffer; cert: Buff
   const uuid = { type: 'string', pattern: '^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$' };
   const requestParams = params({ slug, id: uuid });
   const connectorLease = (request: FastifyRequest) => publicationLease(request.headers.authorization, request.headers['x-outlet-installation']);
+  app.put<{ Params: Outlet; Body: { revision: number; enabled: boolean } }>('/api/publish/:slug/pickup-channel', {
+    onRequest: publish('application/json'), bodyLimit: 512, schema: { params: outletParams, body: {
+      type:'object',additionalProperties:false,required:['revision','enabled'],properties:{revision:positiveInteger,enabled:{type:'boolean'}}
+    } }
+  }, async (request, reply) => {
+    if (!accounts) return reply.code(503).send();
+    await syncPickupChannel(pool, request.params.slug, request.body.revision, request.body.enabled, connectorLease(request));
+    return reply.code(204).send();
+  });
   app.put<{ Params: Outlet; Body: BillingProfile }>('/api/publish/:slug/pickup-pricing', {
     onRequest: publish('application/json'), bodyLimit: 8192, schema: { params: outletParams, body: billingProfileSchema }
   }, async (request, reply) => {
@@ -97,6 +106,13 @@ export async function buildHostedApp(pool: Pool, tls?: { key: Buffer; cert: Buff
   }, async (request, reply) => {
     if (!accounts) return reply.code(503).send();
     return pickupInbox(pool, request.params.slug, connectorLease(request), request.query.after);
+  });
+  app.post<{Params:Outlet;Body:{ids:string[]}}>('/api/publish/:slug/pickup-requests/reconcile',{
+    onRequest:publish('application/json'),bodyLimit:8192,schema:{params:outletParams,body:{type:'object',additionalProperties:false,
+      required:['ids'],properties:{ids:{type:'array',minItems:1,maxItems:100,uniqueItems:true,items:uuid}}}}
+  },async(request,reply)=>{
+    if(!accounts)return reply.code(503).send();
+    return reconcilePickup(pool,request.params.slug,request.body.ids,connectorLease(request));
   });
   app.post<{ Params: Outlet & { id: string }; Body: { revision: number } }>('/api/publish/:slug/pickup-requests/:id/review', {
     onRequest: publish('application/json'), bodyLimit: 512, schema: { params: requestParams, body: {

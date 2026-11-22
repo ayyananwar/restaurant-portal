@@ -33,7 +33,7 @@ export async function availableChannel(client: PoolClient, slug: string) {
   const { rows } = await client.query<{ installation: string; revision: string; version: string; items: GuestMenuItem[]; now_ms: string }>(`
     SELECT c.installation,c.revision,o.version,o.items,floor(extract(epoch FROM clock_timestamp())*1000)::bigint AS now_ms
     FROM online_pickup_channels c JOIN hosted_outlets o ON o.slug=c.outlet
-    WHERE c.outlet=$1 AND c.enabled AND c.heartbeat_at>clock_timestamp()-interval '45 seconds'
+    WHERE c.outlet=$1 AND c.enabled AND o.online_pickup_entitled AND c.heartbeat_at>clock_timestamp()-interval '45 seconds'
       AND c.installation=o.publication_installation AND o.published_at IS NOT NULL`, [slug]);
   if (!rows[0]) throw fail(503, 'Online pickup is unavailable. Contact the restaurant or try again later.');
   return rows[0];
@@ -50,6 +50,9 @@ export async function syncPickupChannel(pool: Pool, slug: string, revision: numb
   if (!lease.installation || !uuid.test(lease.installation) || !lease.tokenHash
     || !Number.isSafeInteger(revision) || revision < 1 || typeof enabled !== 'boolean') throw fail(400, 'Invalid online pickup configuration.');
   return outletWrite(pool, slug, async client => {
+    if (enabled && !(await client.query('SELECT 1 FROM hosted_outlets WHERE slug=$1 AND online_pickup_entitled', [slug])).rowCount) {
+      throw fail(403, 'The online pickup package is not active for this outlet.');
+    }
     const result = await client.query(`INSERT INTO online_pickup_channels(outlet,installation,revision,enabled,heartbeat_at)
       VALUES($1,$2,$3,$4,clock_timestamp()) ON CONFLICT(outlet) DO UPDATE SET
       installation=excluded.installation,revision=excluded.revision,enabled=excluded.enabled,heartbeat_at=excluded.heartbeat_at

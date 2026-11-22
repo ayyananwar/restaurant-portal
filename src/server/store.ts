@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 import type { CheckItem, CheckReceipt, DishStatus, MenuItem, OrderLine, OrderRequest, PaperOrderDetails, PlacementRequest, Role, Staff, Table } from '../shared/contracts.js';
 
-export const storeSchemaVersion = 19;
+export const storeSchemaVersion = 20;
 
 export class WorkflowError extends Error {
   constructor(readonly statusCode: number, message: string) {
@@ -404,6 +404,19 @@ export function openStore(path: string) {
       CREATE TABLE recovery_state(id INTEGER PRIMARY KEY CHECK(id=1),restored_at INTEGER NOT NULL,
         source_hash TEXT NOT NULL,blocked_series TEXT NOT NULL,operator TEXT NOT NULL,reviewed_at INTEGER);
       PRAGMA user_version=19;COMMIT;`);
+  }
+  if (version < 20) {
+    db.exec(`BEGIN IMMEDIATE;
+      CREATE TABLE online_connector(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL DEFAULT 1,
+        enabled INTEGER NOT NULL DEFAULT 0,destination TEXT,ack_revision INTEGER,last_success INTEGER,last_error TEXT,cursor TEXT);
+      INSERT INTO online_connector(id) VALUES(1);
+      CREATE TABLE online_inbox(destination TEXT NOT NULL,id TEXT NOT NULL,revision INTEGER NOT NULL,snapshot TEXT NOT NULL,verified_at INTEGER NOT NULL,
+        review TEXT,reviewed_at INTEGER,PRIMARY KEY(destination,id));
+      CREATE TABLE online_decisions(request_id TEXT PRIMARY KEY,destination TEXT NOT NULL,order_id TEXT NOT NULL,
+        actor_id INTEGER NOT NULL REFERENCES staff(id),payload TEXT NOT NULL,created_at INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('queued','confirmed','conflict')),result TEXT,error TEXT,attempted_at INTEGER);
+      CREATE UNIQUE INDEX online_one_queued ON online_decisions(destination,order_id) WHERE state='queued';
+      PRAGMA user_version=20;COMMIT;`);
   }
   return db;
 }

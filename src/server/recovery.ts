@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import * as sqlite from 'node:sqlite';
-import { createStaff, storeSchemaVersion, WorkflowError } from './store.js';
+import { createStaff, openStore, storeSchemaVersion, WorkflowError } from './store.js';
 import { readBillingProfile } from './billing.js';
 
 const magic = Buffer.from('RPORTBK1');
@@ -42,7 +42,7 @@ function validateDatabase(path: string) {
   try {
     database.exec('PRAGMA trusted_schema=OFF;');
     const version = Number(database.prepare('PRAGMA user_version').get()?.user_version);
-    if (version !== storeSchemaVersion) throw new WorkflowError(422, 'This backup requires a matching supported application version.');
+    if (version < 19 || version > storeSchemaVersion) throw new WorkflowError(422, 'This backup requires a matching supported application version.');
     if (database.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok' || database.prepare('PRAGMA foreign_key_check').get()) {
       throw new WorkflowError(422, 'The backup database failed its integrity checks.');
     }
@@ -149,9 +149,12 @@ export async function recoveryScratchParent(database: sqlite.DatabaseSync) {
 }
 
 function recoveryFacts(database: sqlite.DatabaseSync) {
+  const hasConnector=Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='online_connector'").get());
   const hosted=Boolean(database.prepare('SELECT 1 FROM menu_publication WHERE destination IS NOT NULL').get()
     ||database.prepare('SELECT 1 FROM coupon_claims LIMIT 1').get()
-    ||database.prepare('SELECT 1 FROM receipt_feedback_codes WHERE destination IS NOT NULL LIMIT 1').get());
+    ||database.prepare('SELECT 1 FROM receipt_feedback_codes WHERE destination IS NOT NULL LIMIT 1').get()
+    ||(hasConnector&&(database.prepare('SELECT 1 FROM online_connector WHERE destination IS NOT NULL').get()
+      ||database.prepare('SELECT 1 FROM online_inbox LIMIT 1').get()||database.prepare('SELECT 1 FROM online_decisions LIMIT 1').get())));
   const series=database.prepare('SELECT DISTINCT series FROM bill_sequences').all().map(row=>String(row.series));
   const previous=database.prepare('SELECT blocked_series FROM recovery_state WHERE id=1').get();
   const profile=readBillingProfile(database);
@@ -185,7 +188,7 @@ export async function restoreInspectedBackup(backup: Awaited<ReturnType<typeof i
     try {
       if(live.prepare('PRAGMA quick_check').get()?.quick_check!=='ok')throw new WorkflowError(422,'The current database needs assisted recovery; preserve it before proceeding.');
       const version=Number(live.prepare('PRAGMA user_version').get()?.user_version);
-      if(version!==storeSchemaVersion)throw new WorkflowError(422,'The installed database and backup need the same supported application version.');
+      if(version<19||version>storeSchemaVersion)throw new WorkflowError(422,'The installed database and backup need the same supported application version.');
       current=recoveryFacts(live);
       currentStaff=live.prepare('SELECT id,username,name,role,password_hash,enabled FROM staff ORDER BY id').all() as unknown as typeof currentStaff;
       if(!currentStaff?.some(staff=>staff.role==='admin'&&staff.enabled===1))throw new WorkflowError(422,'Current owner access needs assisted recovery.');
@@ -212,7 +215,7 @@ export async function restoreInspectedBackup(backup: Awaited<ReturnType<typeof i
     const candidate=join(work.path,'restored.sqlite');
     await copyFile(backup.path,candidate);
     if(await hashFile(candidate)!==backup.manifest.sha256)throw new WorkflowError(422,'The recovery copy failed its integrity check.');
-    const restored=new sqlite.DatabaseSync(candidate);
+    const restored=openStore(candidate);
     try {
       restored.exec('PRAGMA foreign_keys=ON; BEGIN IMMEDIATE;');
       const profile=readBillingProfile(restored);
