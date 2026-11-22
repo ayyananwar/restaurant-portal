@@ -2,17 +2,20 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { Field, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
-import type { CheckItem, Table } from '../shared/contracts.js';
+import type { BillingProfile, CheckItem, Table } from '../shared/contracts.js';
 import { api, message } from './api.js';
 import { formatPaise } from './money.js';
 import { ReceiptHandoff } from './receipt-handoff.js';
+import { useEditsLocked } from './edit-lock.js';
 
-export function CheckSplit({ table, connected, onRefresh }: {
+export function CheckSplit({ table, connected, onRefresh, billingProfile }: {
+  billingProfile?: BillingProfile;
   table: Table;
   connected: boolean;
   onRefresh: () => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
+  const editsLocked = useEditsLocked();
   const [reopening, setReopening] = useState(false);
   const [count, setCount] = useState(2);
   const [allocation, setAllocation] = useState<Record<number, number[]>>({});
@@ -79,7 +82,7 @@ export function CheckSplit({ table, connected, onRefresh }: {
         <ul className="split-items">
           {check.items.map(item => <li key={item.lineId}>{item.quantity} × {byId.get(item.lineId)?.name}</li>)}
         </ul>
-        <ReceiptHandoff table={table} checkNumber={index + 1} itemTotal={check.totalPaise}
+        <ReceiptHandoff billingProfile={billingProfile} table={table} checkNumber={index + 1} itemTotal={check.totalPaise}
           connected={connected} onRefresh={onRefresh} />
       </li>)}
     </ol>
@@ -94,11 +97,11 @@ export function CheckSplit({ table, connected, onRefresh }: {
   </section>;
 
   if (!editing || table.hasReceipt) return lines.length ? <>
-    {maxChecks >= 2 && !table.hasReceipt && <Button ref={splitTrigger} className="order-trigger" variant="outline" disabled={!connected || pending || tooManyLines}
+    {maxChecks >= 2 && !table.hasReceipt && <Button ref={splitTrigger} className="order-trigger" variant="outline" disabled={editsLocked || !connected || pending || tooManyLines}
       onClick={() => { saveRequest.current = null; setOrderSnapshot(snapshot); setCount(2); setEditing(true); }}>Split check</Button>}
     {pending && maxChecks >= 2 && <p className="note">Resolve pending dish changes before splitting.</p>}
     {tooManyLines && <p className="note">This order exceeds the 500-line limit for splitting.</p>}
-    <ReceiptHandoff table={table} checkNumber={1} itemTotal={itemTotal} connected={connected} onRefresh={onRefresh} />
+    <ReceiptHandoff billingProfile={billingProfile} table={table} checkNumber={1} itemTotal={itemTotal} connected={connected} onRefresh={onRefresh} />
   </> : null;
 
   const total = (items: CheckItem[]) => items.reduce((sum, item) => sum + (byId.get(item.lineId)?.pricePaise ?? 0) * item.quantity, 0);

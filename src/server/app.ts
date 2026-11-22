@@ -4,7 +4,9 @@ import type { DatabaseSync } from 'node:sqlite';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { maxMenuPhotoBytes, paperOrderModes, paymentMethods, reportPeriods, type CheckIdentity, type Coupon, type DishChangeRequest, type MenuAvailability, type MenuItemDetails, type OrderRequest, type PaperOrderRequest, type PlacementRequest, type ReceiptRequest, type ReportPeriod, type Role, type SplitRequest, type Staff } from '../shared/contracts.js';
 import { reopenSplit, saveSplit } from './check-splits.js';
-import { quoteCoupon, recordReceipt, releaseTable } from './receipt-handoff.js';
+import { quoteBuiltInBill, quoteCoupon, recordBuiltInBill, recordReceipt, releaseTable } from './receipt-handoff.js';
+import { readBillingProfile, saveBillingProfile } from './billing.js';
+import type { BillBuyer, BillingProfile, BuiltInBillRequest } from '../shared/contracts.js';
 import { createCoupon, readCouponRedemptions, readCoupons, setCouponEnabled } from './coupons.js';
 import { correctReadyDish, requestDishChange, resolveDishChange } from './order-changes.js';
 import { readWaiterActivity } from './waiter-activity.js';
@@ -27,6 +29,14 @@ const moneySchema = { type: 'integer', minimum: 0, maximum: 99_999_999_999 };
 const couponCode = { type: 'string', pattern: '^[A-Z0-9][A-Z0-9-]{2,23}$' };
 const couponInput = { type: 'string', minLength: 1, maxLength: 32 };
 const positiveMoney = { ...moneySchema, minimum: 1 };
+const buyerSchema = {
+  type: 'object', additionalProperties: false, required: ['name','address','gstin','placeState'], properties: {
+    name: { type: 'string', maxLength: 100 }, address: { type: 'string', maxLength: 600 },
+    gstin: { type: 'string', maxLength: 15 }, placeState: { type: 'string', pattern: '^[0-9]{2}$' }
+  }
+};
+const billReviewFields = { buyer: buyerSchema, couponCode: { type: 'string', maxLength: 32 } };
+const reviewHashSchema = { type: 'string', pattern: '^[a-f0-9]{64}$' };
 const checkIdentityFields = {
   orderId: integerId, splitId: { anyOf: [integerId, { type: 'null' }] },
   checkNumber: { type: 'integer', minimum: 1, maximum: 8 },
@@ -183,12 +193,34 @@ export function buildApp(db: DatabaseSync, options: {
       tables: readTables(db, staff, options.publication),
       settings: readSettings(db),
       counterOrders: readCounterOrders(db, staff, options.publication),
+      ...(['admin','billing'].includes(staff.role) ? { billingProfile: readBillingProfile(db) } : {}),
       ...(staff.role==='admin'?{ resolutions:db.prepare(`SELECT r.order_id AS orderId,r.table_label AS tableLabel,
         r.amount_paise AS amountPaise,r.reason,r.at,s.name AS owner FROM table_resolutions r JOIN staff s ON s.id=r.owner_id
         ORDER BY r.at DESC,r.order_id DESC LIMIT 100`).all() }:{}),
       ...(staff.role==='kitchen'?{tableCancellations:db.prepare('SELECT order_id AS orderId,table_label AS tableLabel FROM table_resolutions WHERE kitchen_ack_at IS NULL ORDER BY at').all()}:{}),
       ...(staff.role === 'admin' ? { publication: publicationStatus(db, options.publication), tableQr: tableQrDestination() } : {})
     });
+  });
+
+  app.put<{Body:BillingProfile}>('/api/outlet/billing', { schema: { body: {
+    type:'object', additionalProperties:false,
+    required:['enabled','revision','legalName','address','stateCode','gstin','taxMode','rateBasisPoints','pricesIncludeTax','classification','series','testMode'],
+    properties:{enabled:{type:'boolean'},revision:revisionSchema,legalName:{type:'string',maxLength:150},address:{type:'string',maxLength:600},
+      stateCode:{type:'string',pattern:'^[0-9]{2}$'},gstin:{type:'string',maxLength:15},taxMode:{enum:['none','gst','composition']},
+      rateBasisPoints:{type:'integer',minimum:0,maximum:2800},pricesIncludeTax:{type:'boolean'},classification:{type:'string',maxLength:8},
+      series:{type:'string',pattern:'^[A-Z0-9]{1,4}$'},testMode:{type:'boolean'}}
+  }}},(request,reply)=>{saveBillingProfile(db,requireStaff(request,'admin'),request.body);return reply.code(204).send();});
+
+  app.get<{Querystring:{offset?:string;search?:string}}>('/api/bills',{schema:{querystring:{
+    type:'object',additionalProperties:false,properties:{offset:{type:'string',pattern:'^(0|[1-9][0-9]{0,6})$'},search:{type:'string',maxLength:32}}
+  }}},request=>{
+    const staff=requireStaff(request);
+    if(!['admin','billing'].includes(staff.role)) throw new WorkflowError(403,'Only the owner and billing staff can view saved bills.');
+    const rows=db.prepare(`SELECT number,snapshot FROM (
+      SELECT number,snapshot FROM built_in_bills UNION ALL SELECT number,snapshot FROM built_in_credit_notes
+    ) WHERE instr(number,?)>0 ORDER BY json_extract(snapshot,'$.issuedAt') DESC,number DESC LIMIT 51 OFFSET ?`)
+      .all((request.query.search??'').trim().toUpperCase(),Number(request.query.offset??0));
+    return {bills:rows.slice(0,50).map(row=>JSON.parse(String(row.snapshot))),hasMore:rows.length>50};
   });
 
   app.patch<{ Body: OutletSettings }>('/api/outlet/settings', { schema: { body: {
@@ -265,12 +297,25 @@ export function buildApp(db: DatabaseSync, options: {
       properties: {
         requestId: requestIdSchema, revision: revisionSchema, reference: { type: 'string', minLength: 1, maxLength: 100 },
         officialTotalPaise: moneySchema, paymentMethod: { enum: paymentMethods },
+        builtIn: { type:'object',additionalProperties:false,required:['reviewHash','buyer','couponCode'],
+          properties:{reviewHash:reviewHashSchema,...billReviewFields} },
         coupon: { type: 'object', additionalProperties: false, required: ['code','discountPaise'], properties: { code: couponInput, discountPaise: positiveMoney } }
       }
     }
   } }, (request, reply) => reply.send({
     orderId: payCounterOrder(db, requireStaff(request, 'billing'), Number(request.params.id), request.body, options.publication?.endpoint)
   }));
+  app.post<{Params:{id:string};Body:{revision:number;buyer:BillBuyer;couponCode:string}}>('/api/counter-orders/:id/bill-quote',{schema:{
+    params:idSchema,body:{type:'object',additionalProperties:false,required:['revision','buyer','couponCode'],
+      properties:{revision:revisionSchema,...billReviewFields}}
+  }},request=>{
+    requireStaff(request,'billing');
+    const id=Number(request.params.id);
+    const order=db.prepare('SELECT revision FROM counter_orders WHERE order_id=?').get(id);
+    if(!order||order.revision!==request.body.revision) throw new WorkflowError(409,'This counter order changed. Review its current details.');
+    return quoteBuiltInBill(db,null,{orderId:id,splitId:null,checkNumber:1,checkVersion:checkVersion(billableLines(db,id))},
+      request.body.buyer,request.body.couponCode,options.publication?.endpoint);
+  });
   app.post<{Params:{id:string};Body:DishChangeRequest & {reason:string}}>('/api/dishes/:id/correction',{schema:{
     params:idSchema,body:{type:'object',additionalProperties:false,required:['requestId','revision','quantity','note','reason'],properties:{
       requestId:requestIdSchema,revision:revisionSchema,quantity:{type:'integer',minimum:0,maximum:99},
@@ -514,6 +559,20 @@ export function buildApp(db: DatabaseSync, options: {
     recordReceipt(db, Number(request.params.id), requireStaff(request, 'billing').id, request.body, options.publication?.endpoint);
     return reply.code(204).send();
   });
+
+  app.post<{Params:{id:string};Body:CheckIdentity & {buyer:BillBuyer;couponCode:string}}>('/api/tables/:id/bill-quote',{schema:{
+    params:idSchema,body:{type:'object',additionalProperties:false,required:[...Object.keys(checkIdentityFields),'buyer','couponCode'],
+      properties:{...checkIdentityFields,...billReviewFields}}
+  }},request=>{
+    requireStaff(request,'billing');
+    return quoteBuiltInBill(db,Number(request.params.id),request.body,request.body.buyer,request.body.couponCode,options.publication?.endpoint);
+  });
+  app.post<{Params:{id:string};Body:BuiltInBillRequest}>('/api/tables/:id/bills',{schema:{
+    params:idSchema,body:{type:'object',additionalProperties:false,
+      required:[...Object.keys(checkIdentityFields),'buyer','couponCode','requestId','reviewHash','paymentMethod'],
+      properties:{...checkIdentityFields,...billReviewFields,requestId:requestIdSchema,reviewHash:reviewHashSchema,
+        paymentMethod:{anyOf:[{enum:paymentMethods},{type:'null'}]}}}
+  }},request=>recordBuiltInBill(db,Number(request.params.id),requireStaff(request,'billing').id,request.body,options.publication?.endpoint));
 
   app.post<{ Params: { id: string }; Body: { orderId: number } }>('/api/tables/:id/release', {
     schema: { params: idSchema, body: {

@@ -7,8 +7,13 @@ import { paymentMethods, type CouponQuote, type PaymentMethod, type ReceiptReque
 import { api, message } from './api.js';
 import { formatPaise, parseRupees } from './money.js';
 import { formatPublicationTime } from './menu-display.js';
+import type { BillingProfile, BillQuote, BuiltInBillRequest } from '../shared/contracts.js';
+import { BuiltInBill } from './built-in-bill.js';
+import { BillPrint } from './bill-print.js';
+import { useEditsLocked } from './edit-lock.js';
 
-export function ReceiptHandoff({ table, checkNumber, itemTotal, connected, onRefresh }: {
+export function ReceiptHandoff({ table, checkNumber, itemTotal, connected, onRefresh, billingProfile }: {
+  billingProfile?: BillingProfile;
   table: Table;
   checkNumber: number;
   itemTotal: number;
@@ -20,6 +25,8 @@ export function ReceiptHandoff({ table, checkNumber, itemTotal, connected, onRef
   const [error, setError] = useState('');
   const [code, setCode] = useState('');
   const [coupon, setCoupon] = useState<CouponQuote>();
+  const [builtIn, setBuiltIn] = useState(false);
+  const editsLocked = useEditsLocked();
   const receipt = table.receipts.find(item => item.checkNumber === checkNumber);
   const pending = table.lines.some(line => line.change?.outcome === 'pending');
   const changed = snapshot !== null && snapshot !== table.checkVersion;
@@ -77,6 +84,17 @@ export function ReceiptHandoff({ table, checkNumber, itemTotal, connected, onRef
   }
 
   return <div className="receipt-handoff">
+    {receipt?.bill && <BillPrint bill={receipt.bill} />}
+    {!receipt && billingProfile?.enabled && !snapshot && (builtIn ? <BuiltInBill
+      key={`${table.orderId}-${table.checkVersion}-${checkNumber}`} profile={billingProfile} connected={connected && !pending}
+      onRefresh={onRefresh} onCancel={() => setBuiltIn(false)}
+      onQuote={(buyer, couponCode) => api<BillQuote>(`/api/tables/${table.id}/bill-quote`, 'POST', {
+        orderId: table.orderId, splitId: table.splitId, checkNumber, checkVersion: table.checkVersion, buyer, couponCode
+      })} onIssue={(quote, buyer, couponCode, paymentMethod, requestId) => api(`/api/tables/${table.id}/bills`, 'POST', {
+        orderId: table.orderId!, splitId: table.splitId, checkNumber, checkVersion: table.checkVersion!,
+        requestId, reviewHash: quote.reviewHash, buyer, couponCode, paymentMethod
+      } satisfies BuiltInBillRequest)} /> : <Button variant="outline" disabled={editsLocked || !connected || pending || !table.checkVersion}
+        onClick={() => setBuiltIn(true)}>Create built-in bill</Button>)}
     {receipt && <div className="table-header">
       <span className="receipt-reference">{receipt.reference} · {formatPaise(receipt.officialTotalPaise)}</span>
       <Badge variant="secondary" data-state={receipt.paymentMethod ? 'ready' : 'preparing'}>
@@ -85,7 +103,7 @@ export function ReceiptHandoff({ table, checkNumber, itemTotal, connected, onRef
     </div>}
     {receipt?.coupon && <p className="note">Coupon {receipt.coupon.code} · {formatPaise(receipt.coupon.discountPaise)} off</p>}
     {receipt?.feedback && <FeedbackSlip feedback={receipt.feedback} />}
-    {snapshot && !receipt?.paymentMethod ? <form className="receipt-handoff" onSubmit={save}>
+    {(!builtIn || !billingProfile?.enabled || !!receipt) && (snapshot && !receipt?.paymentMethod ? <form className="receipt-handoff" onSubmit={save}>
       {!receipt && <>
         <p className="note">Enter the reference and final amount from the restaurant’s billing software.</p>
         <Field>
@@ -119,8 +137,8 @@ export function ReceiptHandoff({ table, checkNumber, itemTotal, connected, onRef
         <Button type="submit" disabled={!connected || busy || changed || pending || (!!code.trim() && !coupon)}>{busy ? 'Working…' : receipt ? 'Save payment' : 'Save receipt'}</Button>
         <Button type="button" variant="ghost" disabled={busy} onClick={close}>Cancel</Button>
       </div>
-    </form> : !receipt?.paymentMethod && <Button variant="outline" disabled={!connected || pending || !table.checkVersion}
-      onClick={() => { setError(''); setSnapshot(table.checkVersion); }}>{receipt ? 'Record payment' : 'Record receipt'}</Button>}
+    </form> : !receipt?.paymentMethod && <Button variant="outline" disabled={editsLocked || !connected || pending || !table.checkVersion}
+      onClick={() => { setError(''); setSnapshot(table.checkVersion); }}>{receipt ? 'Record payment' : 'Record receipt'}</Button>)}
     {pending && <p className="note">Resolve pending dish changes before recording the receipt.</p>}
     {error && <p role="alert" className="error">{error}</p>}
   </div>;

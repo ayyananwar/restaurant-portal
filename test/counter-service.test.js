@@ -133,6 +133,7 @@ test('paper-served counter orders stay out of kitchen, tokens continue after reo
     const tableOrder = submitOrder(f.db,1,4,{ requestId:randomUUID(), lines:[{ menuId:1,quantity:1 }] });
     // Reproduce the previous schema parent while retaining a real stored table order and request.
     f.db.exec(`PRAGMA foreign_keys=OFF; BEGIN;
+      DROP TABLE built_in_credit_notes; DROP TABLE built_in_bills; DROP TABLE billing_profile; DROP TABLE bill_sequences;
       DROP TABLE table_resolutions; DROP TABLE counter_corrections; DROP TABLE configuration_events; DROP TABLE counter_requests; DROP TABLE counter_orders; DROP TABLE outlet_audit; DROP TABLE outlet_settings;
       CREATE TABLE legacy_orders(id INTEGER PRIMARY KEY,table_id INTEGER NOT NULL REFERENCES dining_tables(id),
         waiter_id INTEGER NOT NULL REFERENCES staff(id),opened_at INTEGER NOT NULL,closed_at INTEGER,closed_by INTEGER REFERENCES staff(id));

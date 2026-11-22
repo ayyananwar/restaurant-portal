@@ -1,7 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { CounterDraft, CounterOrder, CounterPayment, OrderLine, OutletSettings, Staff } from '../shared/contracts.js';
 import { billableLines, checkVersion, readReceipts, WorkflowError } from './store.js';
-import { recordReceiptInTransaction } from './receipt-handoff.js';
+import { recordBuiltInBillInTransaction, recordReceiptInTransaction } from './receipt-handoff.js';
+import { issueCreditNote } from './billing.js';
 
 export function readSettings(db: DatabaseSync): OutletSettings {
   return db.prepare('SELECT mode, revision, change_policy AS changePolicy FROM outlet_settings WHERE id=1').get() as unknown as OutletSettings;
@@ -99,7 +100,15 @@ export function payCounterOrder(db: DatabaseSync, actor: Staff, orderId: number,
         throw new WorkflowError(409, 'A price or availability changed. Cancel this unpaid order and review the current menu.');
       }
     }
-    recordReceiptInTransaction(db, null, actor.id, {
+    if (input.builtIn) {
+      if (input.coupon) throw new WorkflowError(400, 'Use the coupon from the built-in bill preview.');
+      const bill = recordBuiltInBillInTransaction(db, null, actor.id, {
+        orderId, splitId: null, checkNumber: 1, checkVersion: checkVersion(lines), requestId: input.requestId,
+        reviewHash: input.builtIn.reviewHash, buyer: input.builtIn.buyer, couponCode: input.builtIn.couponCode,
+        paymentMethod: input.paymentMethod
+      }, destination);
+      if (bill.totalPaise !== input.officialTotalPaise) throw new WorkflowError(409, 'The payment amount must match the bill preview.');
+    } else recordReceiptInTransaction(db, null, actor.id, {
       orderId, splitId: null, checkNumber: 1, checkVersion: checkVersion(lines),
       reference: input.reference, officialTotalPaise: input.officialTotalPaise, paymentMethod: input.paymentMethod, coupon: input.coupon
     }, destination);
@@ -149,8 +158,11 @@ export function finishCounterOrder(db: DatabaseSync, actor: Staff, orderId: numb
       } else {
         db.prepare('UPDATE order_lines SET cancelled_at=?, revision=revision+1 WHERE order_id=? AND cancelled_at IS NULL').run(Date.now(), orderId);
       }
-      if (receipt) db.prepare('INSERT INTO counter_corrections(order_id,reason,amount_paise,actor_id,at,item,quantity) VALUES (?,?,?,?,?,?,?)')
-        .run(orderId, input.reason.trim(), amount, actor.id, Date.now(), item, quantity);
+      if (receipt) {
+        const correction = db.prepare('INSERT INTO counter_corrections(order_id,reason,amount_paise,actor_id,at,item,quantity) VALUES (?,?,?,?,?,?,?)')
+          .run(orderId, input.reason.trim(), amount, actor.id, Date.now(), item, quantity);
+        if (amount > 0) issueCreditNote(db, orderId, Number(correction.lastInsertRowid), amount, input.reason.trim(), item, quantity);
+      }
       if (!billableLines(db,orderId).length) db.prepare('UPDATE counter_orders SET cancelled_at=? WHERE order_id=?').run(Date.now(),orderId);
     } else {
       const adjustment = db.prepare('SELECT id FROM counter_corrections WHERE order_id=? AND reference IS NULL').get(orderId);
@@ -203,7 +215,10 @@ export function readCounterOrders(db: DatabaseSync, actor: Staff, target?: { end
       receipts: actor.role === 'kitchen' ? [] : readReceipts(db, Number(row.order_id), target),
       totalPaise: lines.reduce((sum, line) => line.status === 'cancelled' ? sum : sum + line.pricePaise * line.quantity, 0),
       refund: actor.role === 'kitchen' ? null : refund,
-      corrections: actor.role === 'kitchen' ? corrections.map(item => ({ ...item,amountPaise:0,reference:null })) : corrections
+      corrections: actor.role === 'kitchen' ? corrections.map(item => ({ ...item,amountPaise:0,reference:null })) : corrections.map(item => {
+        const credit = db.prepare('SELECT snapshot FROM built_in_credit_notes WHERE correction_id=?').get(item.id);
+        return { ...item, ...(credit ? { creditNote: JSON.parse(String(credit.snapshot)) } : {}) };
+      })
     }];
   });
 }

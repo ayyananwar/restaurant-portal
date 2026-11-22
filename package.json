@@ -1,6 +1,6 @@
 {
   "name": "restaurant-portal",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -12,10 +12,11 @@
     "test": "npm run check && npm run build && node --test",
     "test:startup": "node --test scripts/startup-check.js",
     "test:browser": "node scripts/browser-check.js",
+    "test:billing-browser": "node scripts/billing-browser-check.js",
     "test:hosted": "node --test scripts/hosted-check.js",
     "test:windows": "node --test scripts/windows-check.js",
     "check:staging": "node scripts/staging-check.js",
-    "test:all": "npm run test && npm run test:startup && npm run test:browser",
+    "test:all": "npm run test && npm run test:startup && npm run test:browser && npm run test:billing-browser",
     "start": "node dist/server/main.js",
     "setup": "node dist/server/setup.js",
     "setup:hosted": "node dist/hosted/setup.js",

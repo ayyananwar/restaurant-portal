@@ -1,6 +1,6 @@
 # Restaurant portal
 
-Restaurant Portal is a single-outlet restaurant service system in active development. The Windows staff app handles table service, pay-first counter orders, kitchen updates, receipts, menu management, and owner reporting. A separate guest website serves the published menu, offers, phone sign-in, and private feedback. The restaurant's billing software issues the official receipt.
+Restaurant Portal is a single-outlet restaurant service system in active development. The Windows staff app handles table service, pay-first counter orders, kitchen updates, receipts, menu management, and owner reporting. A separate guest website serves the published menu, offers, phone sign-in, and private feedback. Staff can record receipts from existing billing software; the current development build also provides built-in bills and printing.
 
 ## Project status
 
@@ -10,10 +10,23 @@ Restaurant Portal is a single-outlet restaurant service system in active develop
 | Admin | Service modes, staff accounts and tables, owner resolutions, menu catalog, photos and availability, activity reports, QR cards, menu images, coupons, and feedback |
 | Guest website | Classic and Photo-led menus, availability, phone sign-in, offer claims, and receipt-linked feedback |
 | Distribution | Windows installer packaging and a separate hosted guest service |
+| Built-in billing · development | Non-GST receipts, GST invoices, bills of supply, saved-bill search, counter credit notes and native receipt/A4 printing |
 
-The code has been tested with local browser and service fixtures. The outlet pilot still needs real staff phones and Wi-Fi, the selected billing product, a clean Windows boot test, production staging, and real SMS delivery.
+The code has been tested with local browser and service fixtures. One iQOO phone/Windows table-order, kitchen, billing and table-release walkthrough passed with the user. The outlet pilot still needs a second physical phone, outage and reboot checks, a physical printer, the selected billing product, production staging, and real SMS delivery.
 
 Version 0.2.0 adds Table service, pay-first Counter service, and Both as outlet modes. The [service-mode plan](BUILD_PLAN.md#service-modes-included-in-the-first-release) tracks their acceptance checks and remaining outlet verification.
+
+Version 0.3.0 adds built-in billing, invoice history, counter credit notes and native receipt/A4 printing. Its Windows kit passed isolated installation, invoice persistence, update and rollback checks. See [the verification log](VERIFICATION.md#windows-billing-package-030--23-november-2026) for exact scope and remaining pilot gates. This is an ongoing development project, not a production deployment.
+
+### Built-in bills in the current development build
+
+The frozen 0.2.0 Windows package uses external billing handoff. The 0.3.0 kit and current development previews add built-in billing. As owner, open **Outlet overview → Billing setup → Configure billing**. Enter the business identity, state, invoice series and applicable tax details. Start with **Test · not for customer use**. This version uses one tax rate/classification per profile. Mixed item tax rates and electronic tax reporting are not included; verify the outlet's requirements before customer use.
+
+As of 23 November 2026, the active PC preview (`http://127.0.0.1:3100`) and phone preview (`https://10.155.0.148:3443`) use the same sample restaurant in `data/phone-pilot/sample.sqlite`, the current development build, and the accounts in `data/phone-pilot/accounts.txt`. Sign in as `admin` for billing setup. The former separate PC sample database and `data/preview-accounts.txt` are preserved but are not the active preview's accounts. The phone IP depends on the current Wi-Fi lease. Restart its development lab with `node scripts/phone-lab.js --address=<current-private-Wi-Fi-IPv4> --development=true` after building. Do not start two phone labs on the same ports. The PC loopback listener is configured separately; production remains one managed installation.
+
+Billing staff can select **Create built-in bill** on a table check or unpaid counter order, enter any buyer/coupon details, and **Preview bill**. Table bills can be issued unpaid and later marked paid. Counter bills require recorded payment before the kitchen token is issued. **Record receipt** retains the existing external-billing workflow. Open **Saved bills and credit notes** to search and reprint after a table has been released. Partial/full paid counter cancellations create linked credit notes; actual refunds remain external and need a recorded reference.
+
+Saved bills offer 58 mm, 80 mm and A4 layouts. The native print dialog supplies installed printer choices, copies and paper settings. On the development PC only Microsoft Print to PDF and OneNote were installed; physical printer compatibility has not been verified.
 
 ## Set up service modes
 
@@ -218,6 +231,7 @@ The admin can open **Outlet overview → Private feedback** for the latest 100 r
 npm.cmd test
 npm.cmd run test:startup
 npm.cmd run test:browser
+npm.cmd run test:billing-browser
 ```
 
 Run `npm.cmd run test:all` to execute these checks in order. Set `RESTAURANT_TEST_OPENSSL` to the OpenSSL executable path to include the HTTPS handshake and secure-cookie check. It creates and discards a temporary test certificate without changing the Windows trust store.

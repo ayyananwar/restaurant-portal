@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 import type { CheckItem, CheckReceipt, DishStatus, MenuItem, OrderLine, OrderRequest, PaperOrderDetails, PlacementRequest, Role, Staff, Table } from '../shared/contracts.js';
 
-export const storeSchemaVersion = 17;
+export const storeSchemaVersion = 18;
 
 export class WorkflowError extends Error {
   constructor(readonly statusCode: number, message: string) {
@@ -378,6 +378,22 @@ export function openStore(path: string) {
       );
       PRAGMA user_version=17; COMMIT;`);
   }
+  if (version < 18) {
+    db.exec(`BEGIN IMMEDIATE;
+      CREATE TABLE billing_profile(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER NOT NULL,profile TEXT NOT NULL);
+      CREATE TABLE bill_sequences(series TEXT NOT NULL,financial_year TEXT NOT NULL,last_number INTEGER NOT NULL,PRIMARY KEY(series,financial_year));
+      CREATE TABLE built_in_bills (
+        order_id INTEGER NOT NULL,check_number INTEGER NOT NULL,
+        number TEXT NOT NULL UNIQUE,actor_id INTEGER NOT NULL REFERENCES staff(id),request_id TEXT NOT NULL,payload TEXT NOT NULL,snapshot TEXT NOT NULL,
+        PRIMARY KEY(order_id,check_number),UNIQUE(actor_id,request_id),
+        FOREIGN KEY(order_id,check_number) REFERENCES check_receipts(order_id,check_number) DEFERRABLE INITIALLY DEFERRED
+      );
+      CREATE TABLE built_in_credit_notes (
+        correction_id INTEGER PRIMARY KEY REFERENCES counter_corrections(id),number TEXT NOT NULL UNIQUE,
+        order_id INTEGER NOT NULL REFERENCES orders(id),snapshot TEXT NOT NULL
+      );
+      PRAGMA user_version=18;COMMIT;`);
+  }
   return db;
 }
 
@@ -442,15 +458,17 @@ export function readReceipts(db: DatabaseSync, orderId: number, feedbackTarget?:
   const rows = db.prepare(`
     SELECT r.check_number AS checkNumber, r.reference, r.official_total_paise AS officialTotalPaise, r.payment_method AS paymentMethod,
       COALESCE(r.claim_code, r.coupon_code) AS code, r.coupon_discount_paise AS discountPaise, f.code AS feedbackCode, f.expires_at AS expiresAt,
-      f.destination, f.published
+      f.destination, f.published, b.snapshot AS billSnapshot
     FROM check_receipts r LEFT JOIN receipt_feedback_codes f ON f.order_id = r.order_id AND f.check_number = r.check_number
+    LEFT JOIN built_in_bills b ON b.order_id=r.order_id AND b.check_number=r.check_number
     WHERE r.order_id = ? ORDER BY r.check_number
   `).all(orderId) as unknown as Array<Omit<CheckReceipt, 'coupon' | 'feedback'> & {
     code: string | null; discountPaise: number | null; feedbackCode: string | null; expiresAt: number | null;
-    destination: string | null; published: number | null;
+    destination: string | null; published: number | null; billSnapshot: string | null;
   }>;
-  return rows.map(({ code, discountPaise, feedbackCode, expiresAt, destination, published, ...receipt }) => ({
+  return rows.map(({ code, discountPaise, feedbackCode, expiresAt, destination, published, billSnapshot, ...receipt }) => ({
     ...receipt,
+    ...(billSnapshot ? { bill: JSON.parse(billSnapshot) } : {}),
     ...(code !== null && discountPaise !== null ? { coupon: { code, discountPaise } } : {}),
     ...(feedbackCode && expiresAt !== null ? { feedback: {
       code: feedbackCode, expiresAt, published: published === 1 && destination === feedbackTarget?.endpoint,

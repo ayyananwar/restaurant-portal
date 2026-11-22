@@ -8,6 +8,10 @@ import { formatPaise, parseRupees } from './money.js';
 import { OrderComposer } from './order-composer.js';
 import { FeedbackSlip } from './receipt-handoff.js';
 import { formatPublicationTime } from './menu-display.js';
+import type { BillingProfile, BillQuote } from '../shared/contracts.js';
+import { BuiltInBill } from './built-in-bill.js';
+import { BillPrint } from './bill-print.js';
+import { useEditsLocked } from './edit-lock.js';
 
 export const counterStatus = {
   'awaiting-payment': 'Awaiting payment', preparing: 'Preparing', ready: 'Ready',
@@ -22,6 +26,7 @@ export function CounterOrders({ service, connected, onRefresh, onEditChange }: {
     fulfillment: 'takeaway', customer: '', seating: '', paper: 'none', paperReference: ''
   });
   const [filter, setFilter] = useState('active');
+  const editsLocked = useEditsLocked();
   useEffect(() => { onEditChange(stage !== 'list'); }, [stage, onEditChange]);
   useEffect(() => () => onEditChange(false), [onEditChange]);
   const kitchen = service.staff.role === 'kitchen';
@@ -59,19 +64,20 @@ export function CounterOrders({ service, connected, onRefresh, onEditChange }: {
   }
   return <section className="counter-orders" aria-label="Counter orders">
     <div className="table-header"><h2>{kitchen ? 'Counter kitchen orders' : 'Counter orders'}</h2>
-      {!kitchen && <Button id="new-counter-order" disabled={!connected || service.settings.mode === 'table'} onClick={() => {
+      {!kitchen && <Button id="new-counter-order" disabled={editsLocked || !connected || service.settings.mode === 'table'} onClick={() => {
         setDetails({ fulfillment: 'takeaway', customer: '', seating: '', paper: 'none', paperReference: '' }); setFilter('active'); setStage('setup');
       }}>New counter order</Button>}</div>
     {!kitchen && <div className="actions" role="group" aria-label="Counter order status">
       {[['active','Active'],['awaiting-payment','Awaiting payment'],['preparing','Preparing'],['ready','Ready'],['history','History · last 7 days']].map(([key,label]) =>
-        <Button key={key} variant={filter === key ? 'default' : 'outline'} aria-pressed={filter === key} onClick={() => setFilter(key!)}>{label}</Button>)}
+        <Button key={key} disabled={editsLocked} variant={filter === key ? 'default' : 'outline'} aria-pressed={filter === key} onClick={() => setFilter(key!)}>{label}</Button>)}
     </div>}
     {!orders.length && <p className="panel muted">No counter orders in this view.</p>}
-    <div className="table-grid">{orders.map(order => <CounterCard key={order.id} order={order} connected={connected} kitchen={kitchen} onRefresh={onRefresh} />)}</div>
+    <div className="table-grid">{orders.map(order => <CounterCard key={order.id} profile={service.billingProfile} order={order} connected={connected} kitchen={kitchen} onRefresh={onRefresh} />)}</div>
   </section>;
 }
 
-function CounterCard({ order, connected, kitchen, onRefresh }: {
+function CounterCard({ order, connected, kitchen, onRefresh, profile }: {
+  profile?: BillingProfile;
   order: CounterOrder; connected: boolean; kitchen: boolean; onRefresh: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
@@ -80,6 +86,7 @@ function CounterCard({ order, connected, kitchen, onRefresh }: {
   const [code, setCode] = useState('');
   const [action, setAction] = useState<'cancel' | 'refund' | 'reduce'>();
   const [printing, setPrinting] = useState(false);
+  const [builtIn, setBuiltIn] = useState(false);
   const payment = useRef<{ key: string; input: CounterPayment } | undefined>(undefined);
   const actionRequest = useRef<{ key: string; id: string } | undefined>(undefined);
   useEffect(() => { setError(''); }, [order.revision]);
@@ -142,8 +149,17 @@ function CounterCard({ order, connected, kitchen, onRefresh }: {
         <p>Official receipt amount · {formatPaise(receipt.officialTotalPaise)}</p>
         {receipt.coupon && <p>Coupon {receipt.coupon.code} · {formatPaise(receipt.coupon.discountPaise)} off</p>}
         {receipt.feedback && <FeedbackSlip feedback={receipt.feedback} />}
+        {receipt.bill && <BillPrint bill={receipt.bill} />}
       </div>)}
       {order.status === 'awaiting-payment' && <>
+        {profile?.enabled && (builtIn ? <BuiltInBill key={order.revision} profile={profile} connected={connected && !busy} counter customer={order.customer}
+          onRefresh={onRefresh} onCancel={() => setBuiltIn(false)}
+          onQuote={(buyer, couponCode) => api<BillQuote>(`/api/counter-orders/${order.id}/bill-quote`, 'POST', { revision: order.revision, buyer, couponCode })}
+          onIssue={(quote, buyer, couponCode, method, requestId) => api(`/api/counter-orders/${order.id}/payment`, 'POST', {
+            requestId, revision: order.revision, reference: 'BUILT-IN', officialTotalPaise: quote.bill.totalPaise, paymentMethod: method!,
+            builtIn: { reviewHash: quote.reviewHash, buyer, couponCode }
+          } satisfies CounterPayment)} /> : <Button variant="outline" disabled={busy || !connected} onClick={() => setBuiltIn(true)}>Create built-in bill</Button>)}
+        {(!builtIn || !profile?.enabled) && <>
         <form className="counter-payment" onSubmit={pay}>
           <p className="note">Collect payment through your billing system, then record it here. Check the external receipt before retrying an uncertain payment.</p>
           <Field><FieldLabel htmlFor={`pay-reference-${order.id}`}>Official receipt reference</FieldLabel>
@@ -161,7 +177,7 @@ function CounterCard({ order, connected, kitchen, onRefresh }: {
           <Button variant="outline" disabled={busy || !connected || !code.trim()} onClick={() => void run(async () => {
             setCoupon(await api<CouponQuote>(`/api/counter-orders/${order.id}/coupon`, 'POST', { revision: order.revision, code }));
           })}>Check coupon</Button>
-        </div>
+        </div></>}
       </>}
       {order.status === 'ready' && <Button disabled={busy || !connected} onClick={() => finish('collect')}>Confirm collected · {order.token?.split(' ')[1]}</Button>}
       {order.token && <Button variant="outline" onClick={() => setPrinting(true)}>Print token</Button>}
@@ -172,7 +188,8 @@ function CounterCard({ order, connected, kitchen, onRefresh }: {
         </div>}
       {order.corrections.length > 0 && <ul className="split-summary" aria-label="Correction history">{order.corrections.map(item =>
         <li key={item.id}><p>{item.quantity > 0 ? `${item.quantity} × ${item.item}` : 'Order cancellation'} · {item.reason}</p>
-          <p>{formatPaise(item.amountPaise)} · {item.reference ? `Refund recorded · ${item.reference}` : 'Refund needed'}</p></li>)}</ul>}
+          <p>{formatPaise(item.amountPaise)} · {item.reference ? `Refund recorded · ${item.reference}` : 'Refund needed'}</p>
+          {item.creditNote && <BillPrint bill={item.creditNote} />}</li>)}</ul>}
       {order.refund && !order.refund.reference && <p className="error">Refund needed · {formatPaise(order.refund.amountPaise)} · {order.refund.reason}</p>}
       {order.refund && !order.refund.reference && !action && <Button variant="outline" disabled={busy || !connected} onClick={() => setAction('refund')}>Record external refund</Button>}
       {action && <form className="counter-payment" onSubmit={event => {

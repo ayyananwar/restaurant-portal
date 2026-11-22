@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
-import type { CheckIdentity, CheckItem, ReceiptRequest } from '../shared/contracts.js';
+import type { BillBuyer, BuiltInBillRequest, CheckIdentity, CheckItem, ReceiptRequest } from '../shared/contracts.js';
+import { allocateBillNumber, prepareBill } from './billing.js';
 import { couponForTotal } from './coupons.js';
 import { issueFeedbackCode } from './receipt-feedback.js';
 import { activeSplit, billableLines, canReleaseCheck, checkVersion, readReceipts, requireCurrentOrder, WorkflowError } from './store.js';
@@ -29,6 +30,49 @@ function receiptSubtotal(db: DatabaseSync, tableId: number | null, request: Chec
   if (!allocation) throw new WorkflowError(404, 'This check is no longer available.');
   const prices = new Map(lines.map(line => [line.id, line.pricePaise]));
   return allocation.reduce((sum, item) => sum + item.quantity * prices.get(item.lineId)!, 0);
+}
+
+export function quoteBuiltInBill(db: DatabaseSync, tableId: number | null, identity: CheckIdentity,
+  buyer: BillBuyer, couponCode: string, destination?: string) {
+  receiptSubtotal(db, tableId, identity);
+  if (db.prepare('SELECT 1 FROM check_receipts WHERE order_id=? AND check_number=?').get(identity.orderId, identity.checkNumber)) {
+    throw new WorkflowError(409, 'This check already has a receipt.');
+  }
+  return prepareBill(db, { orderId: identity.orderId, splitId: identity.splitId,
+    checkNumber: identity.checkNumber, checkVersion: identity.checkVersion }, buyer, couponCode, destination);
+}
+
+export function recordBuiltInBillInTransaction(db: DatabaseSync, tableId: number | null, actorId: number,
+  request: BuiltInBillRequest, destination?: string) {
+  const payload = JSON.stringify({ tableId, request });
+  const previous = db.prepare('SELECT payload,snapshot FROM built_in_bills WHERE actor_id=? AND request_id=?')
+    .get(actorId, request.requestId);
+  if (previous) {
+    if (previous.payload !== payload) throw new WorkflowError(409, 'This bill request was already used with different details.');
+    return JSON.parse(String(previous.snapshot));
+  }
+  // Explicit identity fields keep the preview hash independent of payment/request metadata.
+  const identity = { orderId: request.orderId, splitId: request.splitId,
+    checkNumber: request.checkNumber, checkVersion: request.checkVersion };
+  const quote = quoteBuiltInBill(db, tableId, identity, request.buyer, request.couponCode, destination);
+  if (quote.reviewHash !== request.reviewHash) throw new WorkflowError(409, 'The bill changed. Preview it again before issuing it.');
+  const now = Date.now();
+  const bill = { ...quote.bill, number: allocateBillNumber(db, quote.bill.profile.series, now), issuedAt: now };
+  recordReceiptInTransaction(db, tableId, actorId, { ...identity, reference: bill.number,
+    officialTotalPaise: bill.totalPaise, paymentMethod: request.paymentMethod,
+    ...(request.couponCode.trim() ? { coupon: { code: request.couponCode.trim(), discountPaise: bill.discountPaise } } : {}) }, destination);
+  db.prepare('INSERT INTO built_in_bills(order_id,check_number,number,actor_id,request_id,payload,snapshot) VALUES (?,?,?,?,?,?,?)')
+    .run(request.orderId, request.checkNumber, bill.number, actorId, request.requestId, payload, JSON.stringify(bill));
+  return bill;
+}
+
+export function recordBuiltInBill(db: DatabaseSync, tableId: number, actorId: number, request: BuiltInBillRequest, destination?: string) {
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const bill = recordBuiltInBillInTransaction(db, tableId, actorId, request, destination);
+    db.exec('COMMIT');
+    return bill;
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
 }
 
 export function quoteCoupon(db: DatabaseSync, tableId: number | null, request: CheckIdentity & { code: string }, destination?: string) {

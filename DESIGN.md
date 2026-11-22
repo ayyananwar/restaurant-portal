@@ -125,6 +125,14 @@ Move keyboard focus to the new admin page heading when switching sections. Retur
 - Show **Unpaid** or **Paid** with the payment method. When a receipt is recorded, lock the check’s dish quantities and any split allocation. Kitchen status updates can continue.
 - The assigned waiter confirms **Mark table vacant** after guests leave. Enable release when every remaining dish is ready and every check is paid, or when all dishes were cancelled.
 
+### Built-in billing
+
+- Keep owner billing setup inside the existing overview. Use the shared Field, Input and Button primitives. Clearly distinguish test invoices, non-GST receipts, GST invoices and bills of supply. Expose the single-rate/classification limitation before enabling customer use.
+- Offer **Create built-in bill** beside external receipt entry. Use one shared editor for table, split and counter bills. Preview the server-calculated items, discount, tax components and total before the deliberate issue action. Counter payment is required before kitchen submission.
+- Preserve editable details on errors; block workspace changes and warn before leaving while a billing form is open. Concurrent profile/order changes require a new preview rather than silently changing a saved bill.
+- Reuse one invoice document for previews, saved bills and native printing. Keep long names wrapping, quantities readable and amounts aligned at 320 px. Print black on white without staff navigation. Separate the paper layout choice from the printer/copies options supplied by the operating system.
+- Keep saved-bill search accessible to billing staff and owners after a table closes. Reprint from the immutable snapshot. Show credit notes against the original invoice and explain that a credit note does not process a payment refund.
+
 ### Counter service and mixed service
 
 These screens follow the [service-mode scope](BUILD_PLAN.md#service-modes-included-in-the-first-release) and its acceptance matrix.

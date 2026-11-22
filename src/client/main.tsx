@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { OrderLine, PaperOrderDetails, Role, ServiceState } from '../shared/contracts.js';
 import { Badge } from '@/components/ui/badge';
@@ -11,6 +11,8 @@ import { OrderComposer } from './order-composer.js';
 import { TablePlacement } from './table-placement.js';
 import { DishChangeControls } from './dish-change.js';
 import { CheckSplit } from './check-split.js';
+import { BillHistory } from './bill-history.js';
+import { EditLockContext } from './edit-lock.js';
 import { ReleaseTable } from './receipt-handoff.js';
 import { PaperOrderSetup } from './paper-order-setup.js';
 import { WaiterActivity } from './waiter-activity.js';
@@ -104,7 +106,12 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
   const [tableId, setTableId] = useState<number | null>(null);
   const [paperEntry, setPaperEntry] = useState<PaperOrderDetails | 'setup' | null>(null);
   const [workspaceView, setWorkspaceView] = useState<(typeof adminPages)[number]['id']>(null);
-  const [workspaceLocked, setWorkspaceLocked] = useState(false);
+  const [workspaceEdit, setWorkspaceLocked] = useState(false);
+  const [billingEdits, setBillingEdits] = useState<Set<string>>(() => new Set());
+  const setBillingLock = useCallback((id: string, active: boolean) => setBillingEdits(current => {
+    const next = new Set(current); if (active) next.add(id); else next.delete(id); return next;
+  }), []);
+  const workspaceLocked = workspaceEdit || billingEdits.size > 0;
   const workspaceHeading = useRef<HTMLHeadingElement>(null);
   const [tableQuery, setTableQuery] = useState('');
   const [tableStatus, setTableStatus] = useState('all');
@@ -218,7 +225,7 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
   const counterAccessible = service.settings.mode !== 'table' || service.counterOrders.some(order =>
     !['collected','cancelled'].includes(order.status) || (order.refund && !order.refund.reference));
   const tableAccessible = service.settings.mode !== 'counter' || occupied > 0;
-  return <div className={`staff-shell ${isAdmin ? 'staff-overview' : 'staff-sidebar-shell'}`} data-role={staff.role}>
+  return <EditLockContext.Provider value={{ locked: workspaceLocked, setLock: setBillingLock }}><div className={`staff-shell ${isAdmin ? 'staff-overview' : 'staff-sidebar-shell'}`} data-role={staff.role}>
     {isAdmin ? <div className="overview-banner" aria-hidden="true" /> :
       <aside className="staff-sidebar">
         <div className="staff-brand"><ConciergeBell aria-hidden="true" /><span>Restaurant Portal</span></div>
@@ -269,6 +276,7 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
       {workspaceLocked && <p className="note">Save or cancel this edit to switch sections.</p>}
     </nav>}
     {error && <p role="alert" className="error">{error}</p>}
+    {(staff.role === 'billing' || (isAdmin && workspaceView === null)) && <BillHistory connected={connected} />}
     {staff.role === 'billing' && !paperEntry && !currentTable && <div className="actions counter-actions" aria-label="Service workspaces" role="group">
       {(tableAccessible || billingView === 'table') && <Button variant={billingView === 'table' ? 'default' : 'outline'} aria-pressed={billingView === 'table'}
         disabled={workspaceLocked} onClick={() => setBillingView('table')}>Table checks</Button>}
@@ -312,8 +320,9 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
       <CounterOrders service={service} connected={connected} onRefresh={refresh} onEditChange={setWorkspaceLocked} />}
     {staff.role === 'billing' && <div className="counter-actions actions">
       {(['open', 'paid'] as const).map(tab => <Button key={tab} variant={counterTab === tab ? 'default' : 'outline'} aria-pressed={counterTab === tab}
+        disabled={workspaceLocked}
         onClick={() => { setCounterTab(tab); setCounterTable(undefined); }}><ClipboardList aria-hidden="true" />{tab === 'open' ? 'Open checks' : 'Paid checks'}</Button>)}
-      <Button id="paper-order-trigger" variant="outline" disabled={!connected || !waiters.length || !menu.length || !tableAccessible}
+      <Button id="paper-order-trigger" variant="outline" disabled={workspaceLocked || !connected || !waiters.length || !menu.length || !tableAccessible}
         onClick={() => setPaperEntry('setup')}>Enter paper order</Button>
     </div>}
     {staff.role === 'kitchen' && <div className="counter-actions"><Button id="menu-catalog-trigger" variant="outline" disabled={!connected}
@@ -335,7 +344,7 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
     <div className={billingDashboard ? 'counter-layout' : undefined}>
     {billingDashboard && counterChecks.length > 0 && <section className="panel counter-list" aria-label={`${counterTab === 'open' ? 'Open' : 'Paid'} checks`}>
       <div className="table-header"><h2>{counterTab === 'open' ? 'Open checks' : 'Paid checks'}</h2><strong>{formatPaise(counterChecks.reduce((sum, table) => sum + checkTotal(table), 0))}</strong></div>
-      {counterChecks.map(table => <button key={table.id} type="button" className="counter-select" aria-controls="counter-check" aria-pressed={selectedCheck?.id === table.id} onClick={() => {
+      {counterChecks.map(table => <button key={table.id} type="button" disabled={workspaceLocked} className="counter-select" aria-controls="counter-check" aria-pressed={selectedCheck?.id === table.id} onClick={() => {
         setCounterTable(table.id);
         if (window.matchMedia('(width < 58rem)').matches) {
           window.requestAnimationFrame(() => document.getElementById('counter-check-title')?.focus());
@@ -375,7 +384,7 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
           Check total <strong>{formatPaise(table.lines.reduce((sum, line) => line.status === 'cancelled' ? sum : sum + line.pricePaise * line.quantity, 0))}</strong>
         </p>}
         {staff.role === 'billing' && table.orderId !== null &&
-          <CheckSplit key={`billing-${table.orderId}`} table={table} connected={connected} onRefresh={refresh} />}
+          <CheckSplit key={`billing-${table.orderId}`} billingProfile={service.billingProfile} table={table} connected={connected} onRefresh={refresh} />}
         {isAdmin&&table.orderId!==null&&<TableResolution key={table.orderId} table={table} connected={connected} onRefresh={refresh}/>}
         {staff.role === 'waiter' && table.waiter?.id === staff.id && table.splitId !== null && !table.hasReceipt &&
           <p className="note">The counter split this check. Ask the counter to reopen it before changing the order.</p>}
@@ -396,7 +405,7 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
     </div>
     {staff.role === 'waiter' && service.settings.changePolicy === 'blocked' && <p className="note">This outlet blocks dish changes once preparation starts.</p>}
     </>}
-  </main></div>;
+  </main></div></EditLockContext.Provider>;
 }
 
 function Dish({ line, role, canEdit, canCorrect, disabled, change, onRefresh, photo }: {

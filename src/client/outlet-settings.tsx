@@ -4,6 +4,7 @@ import { Field, FieldLabel } from '@/components/ui/field';
 import { serviceModes, type ServiceMode, type ServiceState } from '../shared/contracts.js';
 import { api, message } from './api.js';
 import { OutletManagement } from './outlet-management.js';
+import { BillingSettings } from './billing-settings.js';
 
 const labels = { table: 'Table service', counter: 'Counter service · pay first', both: 'Table and counter service' };
 
@@ -49,6 +50,7 @@ export function OutletSettings({ service, connected, onRefresh }: {
         <Button type="button" variant="ghost" disabled={busy} onClick={() => setEditing(false)}>Cancel</Button></div>
     </form>}
     {error && <p className="error" role="alert">{error}</p>}
+    <BillingSettings profile={service.billingProfile} connected={connected} onRefresh={onRefresh} />
     <details onToggle={event=>setManaging(event.currentTarget.open)}>
       <summary className="menu-preview-link">Manage staff and tables</summary>
       {managing&&<OutletManagement service={service} connected={connected} onRefresh={onRefresh}/>}

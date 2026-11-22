@@ -168,6 +168,7 @@ The selected skills were installed from reviewed revisions of [Better Icons](htt
 - [x] Replace the native dish selector with the [waiter dish picker](DESIGN.md#waiter-dish-picker). Add local search, menu categories, one-action adds, and a shared draft that displays as a review pane on phones and alongside the catalog on PCs. Preserve existing sample and outlet menu data when introducing categories.
 - [ ] Complete the [dish-picker acceptance checks](DESIGN.md#acceptance-checks-for-the-first-dish-picker-implementation). See the [verification log](VERIFICATION.md#dish-picker-and-table-placement) for local results. Physical phones, on-screen keyboard behavior, and the real-device search timing target still need verification.
 - [ ] Provision a stable outlet hostname and trusted HTTPS. Restrict Windows Firewall to the staff network and verify the guest network cannot reach the service.
+- [x] Verify one physical phone can submit a table order to the Windows kitchen and kitchen readiness reaches billing with matching quantities, notes, and total. User confirmed the iQOO/Windows sample check on 22 November 2026; see [physical phone results](VERIFICATION.md#physical-phone-check--22-november-2026).
 - [ ] On a Windows counter and two real phones, sign in with WAN disconnected, take an order, mark dishes ready, and check the total. Restart Windows and verify the data.
 
 ## Phase 2 · Service and billing
@@ -199,6 +200,25 @@ Complete these items before the release-candidate gate. This phase extends the t
 - [x] Extend existing service, storage, startup, and browser suites to cover every service-mode acceptance scenario. Reuse fixtures and keep new tests tied to behavior.
 - [x] Review the rendered UI against DESIGN.md and the supplied references. Record screenshots, accessibility checks, mobile behavior, and failure recovery in VERIFICATION.md.
 - [ ] Complete a physical counter-service and mixed-service walkthrough with the outlet's actual payment, receipt, printer, and staff-network setup.
+
+## Phase 2B · Built-in billing and printing
+
+The owner added built-in GST and non-GST customer billing alongside external billing handoff. This extends the tested 0.2.0 baseline. Complete and verify this phase before the pilot is signed off.
+
+Progress on 22 November 2026: the owner/cashier screens, saved-bill search, native print controls, server calculations, immutable invoice records and counter credits passed local checks. See [billing verification](VERIFICATION.md#built-in-billing-groundwork--22-november-2026). On 23 November, both active previews were aligned to the current build and the same phone-sample accounts/database, and the exact Windows 0.3.0 ZIP passed invoice persistence/update/rollback checks. The original 0.2.0 archive remains frozen. Physical printing and tax/reporting review remain pending.
+
+- [x] Add an owner billing profile with business identity, address, invoice series, GST registration details where applicable, tax treatment, prices inclusive or exclusive of tax, and owner-entered tax rates and classification.
+- [x] Support itemized non-GST receipts, GST tax invoices, and bill-of-supply treatment where selected. Validate the required seller and buyer details before issuing a bill.
+- [x] Generate bills for whole table checks, split checks, and pay-first counter orders from the authoritative stored items. Preserve external billing reference and amount entry as a separate selectable workflow.
+- [x] Allocate unique invoice numbers in an outlet financial-year series. Store immutable seller, buyer, item, discount, tax, rounding, and total snapshots. Preserve numbering and exact bill contents across retries and restarts.
+- [x] Compute currency amounts on the server in integer paise. Test discounts, inclusive and exclusive prices, CGST/SGST and IGST treatment, rounding, and stale profile or order reviews.
+- [x] Link paid counter corrections to the original built-in bill and retain corresponding credit-note records and external refund outcomes. Bound cumulative credits by the original bill.
+- [x] Reprint saved bills and credit notes independently of order/payment submission. Support thermal receipt widths and A4 through the native print dialog, with responsive content and no customer-data leakage on kitchen tokens.
+- [x] Verify 58 mm, 80 mm and A4 print layouts as PDFs and record the installed printer inventory. See the billing verification log.
+- [ ] Test a physical printer once one is available. Printer support depends on the operating system's installed driver and the browser's print options.
+- [x] Package the billing build as Windows version 0.3.0 and verify installation, invoice persistence through restarts/updates, reprint snapshots, numbering and safe rollback against the exact ZIP. See [Windows billing package verification](VERIFICATION.md#windows-billing-package-030--23-november-2026).
+- [x] Add regression coverage for invoice duplication, financial-year boundaries, permissions, split allocation, tax calculation, credit limits, and print-only views.
+- [ ] Validate configured tax details and any applicable electronic reporting obligations with the pilot outlet before production invoice use. Record production-specific requirements and verification in the release handoff.
 
 ## Phase 3 · Public website and synchronization
 
@@ -232,6 +252,7 @@ Complete these items before the release-candidate gate. This phase extends the t
 - [x] Run local service/storage, startup/HTTPS, Edge, hosted PostgreSQL, and Windows installer regressions for 0.2.0. Run the dependency audit and targeted source credential-pattern scan. Record scope and results in VERIFICATION.md.
 - [ ] Complete staged security checks against the configured deployment. Fix confirmed findings and retest them. Require zero open known in-scope defects and zero unresolved confirmed security findings before release.
 - [x] Document installation, account provisioning, manual receipt and refund handoff, paper fallback, incident responsibilities, and the absence of supported automated backup and restore in README.md. Confirm outlet-specific contacts and the production recovery decision at handover.
+- [ ] Implement the recovery workflow before pilot release: owner-only consistent SQLite snapshots; explicit backup destination/retention; encrypted export with integrity/schema metadata; and restore with the service stopped, a preserved pre-restore copy, validation before replacement, and safe failure recovery. Keep backups outside versioned application folders and explain that another copy on the same drive does not protect against drive loss. Never restore stale hosted coupon/claim state without reconciliation with the authoritative service. Test unauthorized access, corrupted/truncated files, wrong secrets, disk-full failures, incompatible schemas and successful restoration of orders, payments, invoice numbers and audit history. Record which physical off-device recovery checks remain pending.
 - [ ] After software development and local verification, provision internet staging with a publicly trusted certificate. Run the [staging checks](README.md#verify-internet-staging), including a real restaurant-network interruption and catch-up after reconnection.
 - [ ] Verify SMS delivery and phone sign-in with the configured provider on Indian mobile numbers, including a delayed message and one failed or expired code.
 - [ ] Scan printed QR cards from real phones on a guest network and verify each card opens the correct hosted outlet menu.

@@ -2,6 +2,47 @@ export const roles = ['admin', 'waiter', 'kitchen', 'billing'] as const;
 export type Role = typeof roles[number];
 export const serviceModes = ['table', 'counter', 'both'] as const;
 export type ServiceMode = typeof serviceModes[number];
+export interface BillingProfile {
+  enabled: boolean;
+  revision: number;
+  legalName: string;
+  address: string;
+  stateCode: string;
+  gstin: string;
+  taxMode: 'none' | 'gst' | 'composition';
+  rateBasisPoints: number;
+  pricesIncludeTax: boolean;
+  classification: string;
+  series: string;
+  testMode: boolean;
+}
+export interface BillBuyer { name: string; address: string; gstin: string; placeState: string }
+export interface BillSnapshot {
+  number: string;
+  issuedAt: number;
+  kind: 'receipt' | 'tax-invoice' | 'bill-of-supply' | 'credit-note';
+  profile: BillingProfile;
+  buyer: BillBuyer;
+  items: Array<{ name: string; quantity: number; unitPaise: number; amountPaise: number }>;
+  subtotalPaise: number;
+  discountPaise: number;
+  taxablePaise: number;
+  cgstPaise: number;
+  sgstPaise: number;
+  igstPaise: number;
+  roundingPaise: number;
+  totalPaise: number;
+  originalNumber?: string;
+  reason?: string;
+}
+export interface BuiltInBillRequest extends CheckIdentity {
+  requestId: string;
+  reviewHash: string;
+  buyer: BillBuyer;
+  paymentMethod: PaymentMethod | null;
+  couponCode: string;
+}
+export interface BillQuote { reviewHash: string; bill: BillSnapshot }
 export interface OutletSettings { mode: ServiceMode; revision: number; changePolicy: 'approval' | 'blocked' }
 export interface CounterDraft extends OrderRequest {
   fulfillment: 'dine-in' | 'takeaway';
@@ -17,6 +58,7 @@ export interface CounterPayment {
   officialTotalPaise: number;
   paymentMethod: PaymentMethod;
   coupon?: CouponQuote;
+  builtIn?: { reviewHash: string; buyer: BillBuyer; couponCode: string };
 }
 export interface CounterOrder {
   id: number;
@@ -34,7 +76,7 @@ export interface CounterOrder {
   receipts: CheckReceipt[];
   totalPaise: number;
   refund: { amountPaise: number; reference: string | null; reason: string } | null;
-  corrections: Array<{ id: number; reason: string; amountPaise: number; reference: string | null; item: string; quantity: number }>;
+  corrections: Array<{ id: number; reason: string; amountPaise: number; reference: string | null; item: string; quantity: number; creditNote?: BillSnapshot }>;
 }
 
 export const dishStatuses = ['queued', 'preparing', 'ready', 'cancelled'] as const;
@@ -141,6 +183,7 @@ export const paymentMethods = ['Cash', 'UPI', 'Card', 'Mixed', 'Other'] as const
 export type PaymentMethod = typeof paymentMethods[number];
 
 export interface CheckReceipt {
+  bill?: BillSnapshot;
   checkNumber: number;
   reference: string;
   officialTotalPaise: number;
@@ -156,7 +199,7 @@ export interface CheckIdentity {
   checkVersion: string;
 }
 
-export type ReceiptRequest = Omit<CheckReceipt, 'feedback'> & CheckIdentity;
+export type ReceiptRequest = Omit<CheckReceipt, 'feedback' | 'bill'> & CheckIdentity;
 
 export interface PrivateFeedback {
   id: string;
@@ -211,6 +254,7 @@ export interface SplitRequest {
 }
 
 export interface ServiceState {
+  billingProfile?: BillingProfile;
   tableCancellations?: Array<{orderId:number;tableLabel:string}>;
   resolutions?: Array<{orderId:number;tableLabel:string;amountPaise:number;reason:string;at:number;owner:string}>;
   settings: OutletSettings;

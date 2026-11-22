@@ -8,8 +8,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
+import { defaultBillingProfile } from '../dist/shared/billing.js';
 
-test('Windows bundle installs, preserves orders across restart, validates updates, and rolls back safely', { timeout: 600_000 }, async () => {
+test('Windows bundle preserves orders and invoices across restart, update and safe rollback', { timeout: 600_000 }, async () => {
   assert.equal(process.platform, 'win32');
   assert.ok(process.env.RESTAURANT_WINDOWS_PACKAGE, 'Set RESTAURANT_WINDOWS_PACKAGE to a built installer ZIP.');
   const archive = resolve(process.env.RESTAURANT_WINDOWS_PACKAGE);
@@ -70,21 +71,69 @@ test('Windows bundle installs, preserves orders across restart, validates update
       body: JSON.stringify({ username: 'waiter', password }) });
     assert.equal(login.status, 200);
     const cookie = login.headers.get('set-cookie').split(';')[0];
+    async function loginAs(username) {
+      const account=readFileSync(join(root,'data','demo-accounts.txt'),'utf8').split(/\r?\n/).find(line=>line.startsWith(username+' '));
+      assert.ok(account,`Missing fixture account ${username}`);
+      const response=await fetch(`${origin}/api/session`,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({username,password:account.trim().split(/\s+/)[1]})});
+      assert.equal(response.status,200);
+      return response.headers.get('set-cookie').split(';')[0];
+    }
+    const ownerCookie=await loginAs('admin');
+    const billingCookie=await loginAs('billing');
+    async function request(path,body,session=billingCookie,method=body?'POST':'GET') {
+      const response=await fetch(origin+path,{method,headers:{Cookie:session,...(body?{'Content-Type':'application/json'}:{})},
+        ...(body?{body:JSON.stringify(body)}:{})});
+      assert.ok(response.ok,`Installer fixture request failed: ${path} (${response.status})`);
+      return response.status===204?undefined:response.json();
+    }
+    const invoices=[];
+    const buyer={name:'',address:'',gstin:'',placeState:'20'};
+    if(manifest.schema>=18) await request('/api/outlet/billing',{
+      ...defaultBillingProfile,enabled:true,legalName:'Installer sample',address:'Sample only, Ranchi',series:'TEST'
+    },ownerCookie,'PUT');
+    async function issueBill(tableId) {
+      const service=await request('/api/service');
+      const table=service.tables.find(table=>table.id===tableId);
+      assert.ok(table?.orderId);
+      const identity={orderId:table.orderId,splitId:table.splitId,checkNumber:1,checkVersion:table.checkVersion};
+      const quote=await request(`/api/tables/${tableId}/bill-quote`,{...identity,buyer,couponCode:''});
+      const input={...identity,buyer,couponCode:'',requestId:randomUUID(),reviewHash:quote.reviewHash,paymentMethod:'Cash'};
+      const bill=await request(`/api/tables/${tableId}/bills`,input);
+      assert.deepEqual(await request(`/api/tables/${tableId}/bills`,input),bill);
+      invoices.push(bill);
+      return bill;
+    }
     const placed = await fetch(`${origin}/api/tables/1/orders`, { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' },
       body: JSON.stringify({ requestId: randomUUID(), lines: [{ menuId: 1, quantity: 2 }] }) });
     assert.equal(placed.status, 200);
     const { orderId } = await placed.json();
+    if(manifest.schema>=18) {
+      const bill=await issueBill(1);
+      assert.match(bill.number,/^TEST\/\d{4}\/000001$/);
+      assert.equal(bill.totalPaise,12000);
+    }
     const orderSurvived = async () => {
       const service = await fetch(`${origin}/api/service`, { headers: { Cookie: cookie } });
       assert.equal(service.status, 200);
       const { tables } = await service.json();
       assert.equal(tables[0].orderId, orderId);
       assert.equal(tables[0].lines[0].quantity, 2);
+      if(manifest.schema>=18) {
+        const saved=await request('/api/bills');
+        for(const invoice of invoices) assert.deepEqual(saved.bills.find(bill=>bill.number===invoice.number),invoice);
+      }
     };
     assert.throws(() => install(), error => /Stop the running Restaurant Portal/.test(error.stderr));
     await stop();
     await start();
     await orderSurvived();
+    if(manifest.schema>=18) {
+      await request('/api/tables/2/orders',{requestId:randomUUID(),lines:[{menuId:1,quantity:1}]},cookie);
+      const second=await issueBill(2);
+      assert.match(second.number,/^TEST\/\d{4}\/000002$/);
+      assert.equal(second.totalPaise,6000);
+    }
     await stop();
 
     const update = manifest.version.replace(/\d+$/, patch => String(Number(patch) + 1));
