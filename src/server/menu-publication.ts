@@ -114,8 +114,10 @@ function startPublisher(task: (signal: AbortSignal) => Promise<void>) {
 }
 
 export function startMenuPublisher(db: DatabaseSync, target: Target) {
-  const stopMenu = startPublisher(signal => publishMenu(db, target, signal));
-  const stopFeedback = startPublisher(signal => publishFeedbackCodes(db, target, signal));
-  const stopOffers = startPublisher(signal => syncOffers(db, target, signal));
+  const guarded=(task:(signal:AbortSignal)=>Promise<void>)=>(signal:AbortSignal)=>
+    db.prepare('SELECT 1 FROM recovery_state WHERE id=1 AND reviewed_at IS NULL').get()?Promise.resolve():task(signal);
+  const stopMenu = startPublisher(guarded(signal => publishMenu(db, target, signal)));
+  const stopFeedback = startPublisher(guarded(signal => publishFeedbackCodes(db, target, signal)));
+  const stopOffers = startPublisher(guarded(signal => syncOffers(db, target, signal)));
   return () => Promise.all([stopMenu(), stopFeedback(), stopOffers()]);
 }

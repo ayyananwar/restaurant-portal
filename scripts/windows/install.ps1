@@ -131,6 +131,9 @@ try {
     $app = Join-Path $release 'app'
   }
   if (!(Test-Path -LiteralPath $launcher)) { Copy-Item -LiteralPath (Join-Path $app 'launch.ps1') -Destination $launcher }
+  if (Test-Path -LiteralPath (Join-Path $app 'restore.ps1')) {
+    Copy-Item -LiteralPath (Join-Path $app 'restore.ps1') -Destination (Join-Path $Root 'Restore-Backup.ps1') -Force
+  }
   if (!(Test-Path -LiteralPath $settings)) { '{"RESTAURANT_PORT":"3100"}' | Set-Content -LiteralPath $settings -Encoding ascii }
   if ($Demo) {
     $env:RESTAURANT_DB = $db

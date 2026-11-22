@@ -13,7 +13,7 @@ export function readBillingProfile(db:DatabaseSync):BillingProfile {
 export function saveBillingProfile(db:DatabaseSync,actor:Staff,input:BillingProfile) {
   if(actor.role!=='admin') throw new WorkflowError(403,'Only an owner can configure billing.');
   const profile={...input,legalName:input.legalName.trim(),address:input.address.trim(),gstin:input.gstin.trim().toUpperCase(),
-    series:input.series.trim().toUpperCase(),classification:input.classification.trim()};
+    series:input.series.trim().toUpperCase(),creditSeries:(input.creditSeries??'CN').trim().toUpperCase(),classification:input.classification.trim()};
   if(profile.enabled) {
     if(!profile.legalName||!profile.address||!stateNames[profile.stateCode]) throw new WorkflowError(400,'Enter the business name, address, and state.');
     if(profile.taxMode!=='none'&&(!validGstin(profile.gstin)||profile.gstin.slice(0,2)!==profile.stateCode||!/^\d{4,8}$/.test(profile.classification))) {
@@ -27,6 +27,11 @@ export function saveBillingProfile(db:DatabaseSync,actor:Staff,input:BillingProf
   db.exec('BEGIN IMMEDIATE');
   try {
     const prior=readBillingProfile(db);
+    const recovery=db.prepare('SELECT blocked_series FROM recovery_state WHERE id=1').get();
+    if(recovery) {
+      const blocked=JSON.parse(String(recovery.blocked_series)) as string[];
+      if(blocked.includes(profile.series)||blocked.includes(profile.creditSeries)) throw new WorkflowError(409,'That series is reserved after recovery. Choose a new invoice and credit-note series.');
+    }
     if(prior.revision!==profile.revision) throw new WorkflowError(409,'Billing settings changed. Review the current profile.');
     db.prepare('INSERT INTO billing_profile(id,revision,profile) VALUES (1,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,profile=excluded.profile')
       .run(profile.revision+1,JSON.stringify(profile));
@@ -99,7 +104,7 @@ export function issueCreditNote(db:DatabaseSync,orderId:number,correctionId:numb
   const igstPaise=part('igstPaise');
   const now=Date.now();
   const note:BillSnapshot={
-    ...original,kind:'credit-note',number:allocateBillNumber(db,'CN',now),issuedAt:now,originalNumber:original.number,
+    ...original,kind:'credit-note',number:allocateBillNumber(db,readBillingProfile(db).creditSeries??'CN',now),issuedAt:now,originalNumber:original.number,
     items:[{name:item?`${quantity} × ${item} cancellation`:'Remaining order cancellation',quantity:1,unitPaise:amount,amountPaise:amount}],
     subtotalPaise:amount,discountPaise:0,taxablePaise,cgstPaise,sgstPaise,igstPaise,
     totalPaise:amount,roundingPaise:amount-taxablePaise-cgstPaise-sgstPaise-igstPaise,reason

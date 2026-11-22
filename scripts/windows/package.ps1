@@ -11,7 +11,7 @@ if (!(Test-Path -LiteralPath $node -PathType Leaf) -or !(Test-Path -LiteralPath 
   throw 'Supply an extracted official Windows Node.js release containing node.exe and LICENSE.'
 }
 $nodeVersion = (& $node -p 'process.version').Trim()
-if ($LASTEXITCODE -or $nodeVersion -notmatch '^v22\.(\d+)\.\d+$' -or [int]$Matches[1] -lt 14) { throw 'Use a supported Node 22 Windows runtime.' }
+if ($LASTEXITCODE -or $nodeVersion -notmatch '^v22\.(\d+)\.\d+$' -or [int]$Matches[1] -lt 16) { throw 'Use a supported Node 22.16 or newer Windows runtime.' }
 if ((& $node -p 'process.arch').Trim() -ne 'x64') { throw 'This package requires the x64 Windows runtime.' }
 if (!$Version) { $Version = (Get-Content (Join-Path $project 'package.json') -Raw | ConvertFrom-Json).version }
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw 'Use a three-part release version.' }
@@ -44,6 +44,7 @@ try {
     Copy-Item -LiteralPath $dependency -Destination $target -Recurse
   }
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'launch.ps1') -Destination (Join-Path $app 'launch.ps1')
+  Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'restore.ps1') -Destination (Join-Path $app 'restore.ps1')
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install.ps1') -Destination (Join-Path $stage 'Install.ps1')
   $scratch = Join-Path $stage 'validation.sqlite'
   $check = & (Join-Path $app 'runtime/node.exe') (Join-Path $app 'dist/server/install-check.js') (Join-Path $stage 'empty.sqlite') $scratch

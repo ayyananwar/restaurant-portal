@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 import type { CheckItem, CheckReceipt, DishStatus, MenuItem, OrderLine, OrderRequest, PaperOrderDetails, PlacementRequest, Role, Staff, Table } from '../shared/contracts.js';
 
-export const storeSchemaVersion = 18;
+export const storeSchemaVersion = 19;
 
 export class WorkflowError extends Error {
   constructor(readonly statusCode: number, message: string) {
@@ -18,8 +18,13 @@ const derivePassword = promisify(scrypt) as (
 
 export function openStore(path: string) {
   const db = new DatabaseSync(path);
-  db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 3000; PRAGMA journal_mode = WAL;');
+  db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 3000;');
   const version = Number(db.prepare('PRAGMA user_version').get()?.user_version);
+  if (version > storeSchemaVersion) {
+    db.close();
+    throw new Error('The outlet database requires a newer application version.');
+  }
+  db.exec('PRAGMA journal_mode = WAL;');
   if (version === 0) {
     db.exec(`
       BEGIN IMMEDIATE;
@@ -393,6 +398,12 @@ export function openStore(path: string) {
         order_id INTEGER NOT NULL REFERENCES orders(id),snapshot TEXT NOT NULL
       );
       PRAGMA user_version=18;COMMIT;`);
+  }
+  if (version < 19) {
+    db.exec(`BEGIN IMMEDIATE;
+      CREATE TABLE recovery_state(id INTEGER PRIMARY KEY CHECK(id=1),restored_at INTEGER NOT NULL,
+        source_hash TEXT NOT NULL,blocked_series TEXT NOT NULL,operator TEXT NOT NULL,reviewed_at INTEGER);
+      PRAGMA user_version=19;COMMIT;`);
   }
   return db;
 }

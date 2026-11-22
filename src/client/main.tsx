@@ -275,6 +275,7 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
         }}><Icon aria-hidden="true" />{label}</Button>)}
       {workspaceLocked && <p className="note">Save or cancel this edit to switch sections.</p>}
     </nav>}
+    {service.recovery?.pending&&<p className="error" role="alert">This outlet was restored from a backup. Service changes are paused until the owner reconciles orders, payments and refunds in Outlet overview.</p>}
     {error && <p role="alert" className="error">{error}</p>}
     {(staff.role === 'billing' || (isAdmin && workspaceView === null)) && <BillHistory connected={connected} />}
     {staff.role === 'billing' && !paperEntry && !currentTable && <div className="actions counter-actions" aria-label="Service workspaces" role="group">

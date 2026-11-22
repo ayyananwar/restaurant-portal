@@ -47,6 +47,18 @@ if (!existsSync(node)) {
   });
 }
 if (development && !existsSync(join(appDirectory, 'dist/server/main.js'))) throw new Error('Build the development app before starting the phone lab.');
+const database = join(root, 'sample.sqlite');
+if (existsSync(database)) {
+  const schema = development ? Number(run(node, ['--input-type=module', '-e',
+    "const store=await import('./dist/server/store.js'); process.stdout.write(String(store.storeSchemaVersion));"], { cwd: appDirectory }))
+    : JSON.parse(readFileSync(join(packageDirectory, 'manifest.json'), 'utf8').replace(/^\uFEFF/, '')).schema;
+  const current = Number(run(node, ['-e',
+    "const {DatabaseSync}=require('node:sqlite');const db=new DatabaseSync(process.env.PHONE_LAB_DATABASE,{readOnly:true});try{process.stdout.write(String(db.prepare('PRAGMA user_version').get().user_version));}finally{db.close();}"],
+    { env: { ...process.env, PHONE_LAB_DATABASE: database } }));
+  if (!Number.isInteger(schema) || !Number.isInteger(current) || current > schema) {
+    throw new Error('The phone sample requires a newer application schema. Use the current development build or a matching newer kit.');
+  }
+}
 const caKey = join(root, 'ca.key');
 const ca = join(root, 'restaurant-phone-lab.crt');
 if (!existsSync(ca)) {
@@ -61,7 +73,6 @@ const extensions = join(root, 'server.ext');
 writeFileSync(extensions, `subjectAltName=IP:${address}\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n`);
 run(openssl, ['req', '-new', '-newkey', 'rsa:2048', '-nodes', '-sha256', '-subj', '/CN=Restaurant Portal Phone Lab Server', '-keyout', key, '-out', csr]);
 run(openssl, ['x509', '-req', '-in', csr, '-CA', ca, '-CAkey', caKey, '-CAcreateserial', '-days', '14', '-sha256', '-extfile', extensions, '-out', cert]);
-const database = join(root, 'sample.sqlite');
 const env = { ...process.env, RESTAURANT_DB: database, RESTAURANT_BIND: address, RESTAURANT_PORT: '3443',
   RESTAURANT_ORIGIN: origin, RESTAURANT_TLS_KEY: key, RESTAURANT_TLS_CERT: cert, RESTAURANT_SAMPLE_ARTWORK: '1',
   RESTAURANT_PUBLISH_ORIGIN: '', RESTAURANT_PUBLISH_OUTLET: '', RESTAURANT_PUBLISH_TOKEN: '', RESTAURANT_QR_PREVIEW_URL: '' };

@@ -12,7 +12,7 @@ export const stateNames: Record<string,string> = {
 
 export const defaultBillingProfile: BillingProfile = {
   enabled:false,revision:0,legalName:'',address:'',stateCode:'20',gstin:'',taxMode:'none',
-  rateBasisPoints:0,pricesIncludeTax:true,classification:'',series:'RP',testMode:true
+  rateBasisPoints:0,pricesIncludeTax:true,classification:'',series:'RP',creditSeries:'CN',testMode:true
 };
 
 export function validGstin(value:string) {

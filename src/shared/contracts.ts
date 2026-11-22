@@ -14,6 +14,7 @@ export interface BillingProfile {
   pricesIncludeTax: boolean;
   classification: string;
   series: string;
+  creditSeries?: string;
   testMode: boolean;
 }
 export interface BillBuyer { name: string; address: string; gstin: string; placeState: string }
@@ -254,6 +255,7 @@ export interface SplitRequest {
 }
 
 export interface ServiceState {
+  recovery?: { restoredAt:number; pending:boolean; sourceHash?:string };
   billingProfile?: BillingProfile;
   tableCancellations?: Array<{orderId:number;tableLabel:string}>;
   resolutions?: Array<{orderId:number;tableLabel:string;amountPaise:number;reason:string;at:number;owner:string}>;

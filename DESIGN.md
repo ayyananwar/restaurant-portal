@@ -148,6 +148,12 @@ These screens follow the [service-mode scope](BUILD_PLAN.md#service-modes-includ
 - Before a receipt or split is recorded, billing can reduce or cancel a ready table dish or correct its note, with a required audit reason. Owners can resolve an unpaid table after reviewing its current balance and recording a reason. Show the kitchen a separate stop-preparation notice.
 - Use the same phone and PC interaction rules as the existing staff workspace. Verify empty queues, long names, missing optional data, keyboard focus, connection loss, retries, and simultaneous updates.
 
+### Backup and recovery controls
+
+- Put **Export encrypted backup** in the shared owner overview, using the existing Field/Input/Button system. Ask for a separate passphrase twice, explain how to keep it safely, preserve entries after recoverable errors, and protect the open form from navigation. Never display a plaintext passphrase or put it into an address.
+- Announce snapshot/encryption progress and disable duplicate submissions. The success message says the download started; it asks the owner to confirm the saved file and keep an off-device copy rather than claiming that storage has been verified.
+- Keep restore outside the running web interface. After offline recovery, show a clear paused-service banner and an owner review form. Name the reconciliation needed, require an explicit checkbox, and record review of the current restoration before enabling business changes. Keep the review checkbox label at least 44 px tall and readable on a phone.
+
 ### Paper-order entry
 
 - Focus the setup heading on open. If the selected table or waiter becomes unavailable, clear it from the visible selection and explain what to choose next.

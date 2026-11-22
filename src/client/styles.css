@@ -188,6 +188,8 @@ h2 { font-size: 1.125rem; font-weight: 700; }
 .outlet-settings { margin-bottom: var(--space-4); }
 .table-resolution { padding: var(--space-3); border-top: 1px solid var(--border); }
 .billing-settings, .built-in-bill { display: grid; gap: var(--space-3); border-top: 1px solid var(--border); padding-top: var(--space-4); margin-top: var(--space-3); }
+.recovery-confirmation [data-slot="field-label"] { min-height: var(--touch-size); display: flex; align-items: center; gap: var(--space-2); }
+.recovery-confirmation input { inline-size: 1.25rem; block-size: 1.25rem; flex-shrink: 0; accent-color: var(--primary); }
 .bill-print-controls { display: grid; gap: var(--space-3); padding-block: var(--space-3); }
 .bill-print-controls > button, .built-in-bill > button { justify-self: start; }
 .saved-bill { min-width: 0; }

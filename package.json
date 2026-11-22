@@ -1,10 +1,10 @@
 {
   "name": "restaurant-portal",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.14.0"
+    "node": ">=22.16.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.server.json && vite build",
@@ -13,10 +13,11 @@
     "test:startup": "node --test scripts/startup-check.js",
     "test:browser": "node scripts/browser-check.js",
     "test:billing-browser": "node scripts/billing-browser-check.js",
+    "test:recovery": "node --test scripts/recovery-check.js",
     "test:hosted": "node --test scripts/hosted-check.js",
     "test:windows": "node --test scripts/windows-check.js",
     "check:staging": "node scripts/staging-check.js",
-    "test:all": "npm run test && npm run test:startup && npm run test:browser && npm run test:billing-browser",
+    "test:all": "npm run test && npm run test:startup && npm run test:browser && npm run test:billing-browser && npm run test:recovery",
     "start": "node dist/server/main.js",
     "setup": "node dist/server/setup.js",
     "setup:hosted": "node dist/hosted/setup.js",

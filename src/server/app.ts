@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import Fastify, { type FastifyRequest } from 'fastify';
 import { maxMenuPhotoBytes, paperOrderModes, paymentMethods, reportPeriods, type CheckIdentity, type Coupon, type DishChangeRequest, type MenuAvailability, type MenuItemDetails, type OrderRequest, type PaperOrderRequest, type PlacementRequest, type ReceiptRequest, type ReportPeriod, type Role, type SplitRequest, type Staff } from '../shared/contracts.js';
@@ -20,6 +21,7 @@ import { serviceModes, type CounterDraft, type CounterPayment, type OutletSettin
 import { roles } from '../shared/contracts.js';
 import { addStaffAccount, readStaffAccounts, resetStaffPassword, saveTable, updateStaffAccount } from './outlet-management.js';
 import { resolveTableBalance, tableResolutionQuote } from './table-resolution.js';
+import { createBackupJob } from './recovery-job.js';
 import { authenticate, billableLines, checkVersion, readMenu, readTables, readWaiters, submitOrder, updateDish, updatePlacement, WorkflowError } from './store.js';
 
 const integerId = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER };
@@ -104,6 +106,8 @@ export function buildApp(db: DatabaseSync, options: {
     ajv: { customOptions: { removeAdditional: false, coerceTypes: false } }
   });
   const attempts = new Map<string, { count: number; expires: number }>();
+  let backupBusy = false;
+  let lastBackup = 0;
 
   function tableQrDestination() {
     if (options.publication) {
@@ -150,6 +154,16 @@ export function buildApp(db: DatabaseSync, options: {
     return staff;
   }
 
+  app.addHook('preHandler',async request=>{
+    if(request.method==='GET'||request.method==='HEAD')return;
+    const path=request.url.split('?')[0];
+    if(['/api/session','/api/session/logout','/api/outlet/backup','/api/outlet/recovery-review'].includes(path!))return;
+    if(db.prepare('SELECT 1 FROM recovery_state WHERE id=1 AND reviewed_at IS NULL').get()) {
+      requireStaff(request);
+      throw new WorkflowError(409,'The owner must review restored orders, payments and refunds before service resumes.');
+    }
+  });
+
   let activeLogins = 0;
   app.post<{ Body: { username: string; password: string } }>('/api/session', {
     schema: { body: loginSchema }
@@ -185,8 +199,11 @@ export function buildApp(db: DatabaseSync, options: {
 
   app.get('/api/service', (request, reply) => {
     const staff = requireStaff(request);
+    const recovery=db.prepare('SELECT restored_at,source_hash,reviewed_at FROM recovery_state WHERE id=1').get();
     return reply.send({
       staff,
+      ...(recovery?{recovery:{restoredAt:Number(recovery.restored_at),pending:recovery.reviewed_at===null,
+        ...(staff.role==='admin'?{sourceHash:String(recovery.source_hash)}:{})}}:{}),
       ...(options.sampleArtwork ? { sampleArtwork: true } : {}),
       menu: readMenu(db),
       waiters: staff.role === 'waiter' || staff.role === 'billing' ? readWaiters(db) : [],
@@ -202,13 +219,59 @@ export function buildApp(db: DatabaseSync, options: {
     });
   });
 
+  app.post<{Body:{sourceHash:string;restoredAt:number;confirmed:boolean}}>('/api/outlet/recovery-review',{schema:{body:{
+    type:'object',additionalProperties:false,required:['sourceHash','restoredAt','confirmed'],properties:{sourceHash:reviewHashSchema,restoredAt:integerId,confirmed:{const:true}}
+  }}},(request,reply)=>{
+    const actor=requireStaff(request,'admin');
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const recovery=db.prepare('SELECT source_hash,restored_at,reviewed_at FROM recovery_state WHERE id=1').get();
+      if(!recovery||recovery.source_hash!==request.body.sourceHash||recovery.restored_at!==request.body.restoredAt)throw new WorkflowError(409,'The recovery record changed. Review the current restoration.');
+      if(recovery.reviewed_at===null) {
+        const now=Date.now();
+        db.prepare('UPDATE recovery_state SET reviewed_at=? WHERE id=1').run(now);
+        db.prepare('INSERT INTO configuration_events(actor_id,at,action,details) VALUES(?,?,?,?)')
+          .run(actor.id,now,'recovery-reviewed',JSON.stringify({sourceHash:request.body.sourceHash,restoredAt:request.body.restoredAt}));
+      }
+      db.exec('COMMIT');return reply.code(204).send();
+    }catch(error){db.exec('ROLLBACK');throw error;}
+  });
+
+  app.post<{Body:{passphrase:string}}>('/api/outlet/backup',{schema:{body:{type:'object',additionalProperties:false,
+    required:['passphrase'],properties:{passphrase:{type:'string',minLength:16,maxLength:256,pattern:'^[^\\r\\n\\u0000]+$'}}}
+  }},async(request,reply)=>{
+    const actor=requireStaff(request,'admin');
+    if(backupBusy||Date.now()-lastBackup<30_000)throw new WorkflowError(429,'A backup is running or was just completed. Wait 30 seconds before exporting again.');
+    backupBusy=true;
+    let streaming=false;
+    try {
+      const result=await createBackupJob(db,request.body.passphrase);
+      let stream:ReturnType<typeof createReadStream>|undefined;
+      try {
+        // Revalidate authorization after asynchronous work, before any private data leaves the app.
+        if(requireStaff(request,'admin').id!==actor.id)throw new WorkflowError(403,'Your access changed. Sign in again before backing up.');
+        if(reply.raw.destroyed){await result.cleanup();return reply;}
+        db.prepare('INSERT INTO configuration_events(actor_id,at,action,details) VALUES(?,?,?,?)')
+          .run(actor.id,Date.now(),'backup-export',JSON.stringify({schema:result.manifest.schema,createdAt:result.manifest.createdAt}));
+        lastBackup=Date.now();
+        stream=createReadStream(result.path);
+        stream.once('close',()=>void result.cleanup().catch(()=>request.log.error('Backup scratch cleanup failed')).finally(()=>{backupBusy=false;}));
+        reply.raw.once('close',()=>stream?.destroy());
+        streaming=true;
+        return reply.type('application/octet-stream')
+          .header('Content-Disposition',`attachment; filename="restaurant-backup-${result.manifest.createdAt}.rpb"`)
+          .send(stream);
+      } catch(error){stream?.destroy();await result.cleanup();backupBusy=false;throw error;}
+    } finally {if(!streaming)backupBusy=false;}
+  });
+
   app.put<{Body:BillingProfile}>('/api/outlet/billing', { schema: { body: {
     type:'object', additionalProperties:false,
     required:['enabled','revision','legalName','address','stateCode','gstin','taxMode','rateBasisPoints','pricesIncludeTax','classification','series','testMode'],
     properties:{enabled:{type:'boolean'},revision:revisionSchema,legalName:{type:'string',maxLength:150},address:{type:'string',maxLength:600},
       stateCode:{type:'string',pattern:'^[0-9]{2}$'},gstin:{type:'string',maxLength:15},taxMode:{enum:['none','gst','composition']},
       rateBasisPoints:{type:'integer',minimum:0,maximum:2800},pricesIncludeTax:{type:'boolean'},classification:{type:'string',maxLength:8},
-      series:{type:'string',pattern:'^[A-Z0-9]{1,4}$'},testMode:{type:'boolean'}}
+      series:{type:'string',pattern:'^[A-Z0-9]{1,4}$'},creditSeries:{type:'string',pattern:'^[A-Z0-9]{1,4}$'},testMode:{type:'boolean'}}
   }}},(request,reply)=>{saveBillingProfile(db,requireStaff(request,'admin'),request.body);return reply.code(204).send();});
 
   app.get<{Querystring:{offset?:string;search?:string}}>('/api/bills',{schema:{querystring:{

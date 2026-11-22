@@ -70,7 +70,7 @@ test('Windows bundle preserves orders and invoices across restart, update and sa
     const login = await fetch(`${origin}/api/session`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: 'waiter', password }) });
     assert.equal(login.status, 200);
-    const cookie = login.headers.get('set-cookie').split(';')[0];
+    let cookie = login.headers.get('set-cookie').split(';')[0];
     async function loginAs(username) {
       const account=readFileSync(join(root,'data','demo-accounts.txt'),'utf8').split(/\r?\n/).find(line=>line.startsWith(username+' '));
       assert.ok(account,`Missing fixture account ${username}`);
@@ -79,8 +79,8 @@ test('Windows bundle preserves orders and invoices across restart, update and sa
       assert.equal(response.status,200);
       return response.headers.get('set-cookie').split(';')[0];
     }
-    const ownerCookie=await loginAs('admin');
-    const billingCookie=await loginAs('billing');
+    let ownerCookie=await loginAs('admin');
+    let billingCookie=await loginAs('billing');
     async function request(path,body,session=billingCookie,method=body?'POST':'GET') {
       const response=await fetch(origin+path,{method,headers:{Cookie:session,...(body?{'Content-Type':'application/json'}:{})},
         ...(body?{body:JSON.stringify(body)}:{})});
@@ -162,6 +162,28 @@ test('Windows bundle preserves orders and invoices across restart, update and sa
     assert.deepEqual(state(), { active: manifest.version, previous: update });
     await start();
     await orderSurvived();
+    if(manifest.schema>=19) {
+      const backupPassword='installer-only recovery fixture secret';
+      const response=await fetch(`${origin}/api/outlet/backup`,{method:'POST',headers:{Cookie:ownerCookie,'Content-Type':'application/json'},
+        body:JSON.stringify({passphrase:backupPassword})});
+      assert.equal(response.status,200);
+      const backupFile=join(lab,'outlet.rpb');writeFileSync(backupFile,Buffer.from(await response.arrayBuffer()));
+      await stop();
+      const restoreCommand=(...extra)=>execFileSync('powershell.exe',[...shell,'-File',join(root,'Restore-Backup.ps1'),'-Root',root,
+        '-Backup',backupFile,'-PassphraseFromStdin',...extra],{input:backupPassword+'\n',windowsHide:true,encoding:'utf8',timeout:30_000});
+      const reviewed=JSON.parse(restoreCommand());
+      const restored=JSON.parse(restoreCommand('-Mode','restore','-ConfirmHash',reviewed.backup.sha256,'-InvoiceSeries','R2','-CreditSeries','C2'));
+      assert.equal(restored.invoiceSeries,'R2');
+      await start();
+      const stale=await fetch(`${origin}/api/service`,{headers:{Cookie:cookie}});assert.equal(stale.status,401);
+      cookie=await loginAs('waiter');ownerCookie=await loginAs('admin');billingCookie=await loginAs('billing');
+      const pending=await request('/api/service',undefined,ownerCookie);assert.equal(pending.recovery.pending,true);
+      await orderSurvived();
+      await request('/api/outlet/recovery-review',{sourceHash:reviewed.backup.sha256,restoredAt:pending.recovery.restoredAt,confirmed:true},ownerCookie);
+      assert.equal((await request('/api/service',undefined,ownerCookie)).recovery.pending,false);
+      const financial=(await request('/api/service')).billingProfile;
+      assert.equal(financial.series,'R2');assert.equal(financial.creditSeries,'C2');
+    }
   } finally {
     await stop();
     assert.ok(lab.startsWith(`${temporary}${sep}restaurant-installer-`));

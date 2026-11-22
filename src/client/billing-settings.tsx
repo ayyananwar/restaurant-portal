@@ -66,6 +66,8 @@ function BillingProfileForm({ profile, connected, onRefresh, onClose }: {
     </>}
     <Field><FieldLabel htmlFor="bill-series">Invoice series · 1–4 letters or numbers</FieldLabel><Input id="bill-series" value={value.series} maxLength={4} pattern="[A-Z0-9]{1,4}" required
       disabled={busy} onChange={event => change('series', event.target.value.toUpperCase())} /></Field>
+    <Field><FieldLabel htmlFor="bill-credit-series">Credit-note series · 1–4 letters or numbers</FieldLabel><Input id="bill-credit-series" value={value.creditSeries??'CN'} maxLength={4} pattern="[A-Z0-9]{1,4}" required
+      disabled={busy} onChange={event => change('creditSeries', event.target.value.toUpperCase())} /></Field>
     <Field><FieldLabel htmlFor="bill-test-mode">Invoice use</FieldLabel><select id="bill-test-mode" value={String(value.testMode)} disabled={busy}
       onChange={event => change('testMode', event.target.value === 'true')}><option value="true">Test · not for customer use</option><option value="false">Customer bills</option></select></Field>
     <p className="note">This version uses one classification and tax rate for the whole bill. Confirm your applicable tax treatment before customer use. Electronic tax reporting and mixed item tax rates are not included.</p>

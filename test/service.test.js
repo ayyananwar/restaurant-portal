@@ -13,6 +13,23 @@ import { createStaff, openStore, storeSchemaVersion } from '../dist/server/store
 import { tableQrPreviewUrl } from '../dist/server/table-qr.js';
 import { readWaiterActivity } from '../dist/server/waiter-activity.js';
 
+test('opening a newer database fails closed without changing its data or journal mode', () => {
+  const directory=mkdtempSync(join(tmpdir(),'restaurant-future-schema-'));
+  const path=join(directory,'future.sqlite');
+  try {
+    const future=new DatabaseSync(path);
+    future.exec(`CREATE TABLE future_marker(value TEXT); INSERT INTO future_marker VALUES('preserve'); PRAGMA user_version=${storeSchemaVersion+1};`);
+    future.close();
+    assert.throws(()=>openStore(path),/requires a newer application version/);
+    const checked=new DatabaseSync(path,{readOnly:true});
+    try {
+      assert.equal(checked.prepare('PRAGMA user_version').get().user_version,storeSchemaVersion+1);
+      assert.equal(checked.prepare('PRAGMA journal_mode').get().journal_mode,'delete');
+      assert.equal(checked.prepare('SELECT value FROM future_marker').get().value,'preserve');
+    }finally{checked.close();}
+  }finally{rmSync(directory,{recursive:true,force:true});}
+});
+
 const origin = 'http://127.0.0.1:3100';
 const password = 'test-only-unique-fixture-password';
 let directory, db, app;

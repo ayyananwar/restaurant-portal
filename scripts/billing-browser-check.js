@@ -6,6 +6,7 @@ import { chromium } from 'playwright';
 import axe from 'axe-core';
 import { buildApp } from '../dist/server/app.js';
 import { createStaff, openStore, submitOrder } from '../dist/server/store.js';
+import { inspectEncryptedBackup } from '../dist/server/recovery.js';
 
 const scratch=mkdtempSync(join(tmpdir(),'restaurant-billing-browser-'));
 const output=resolve('data/billing-check');
@@ -52,6 +53,29 @@ try {
   await owner.screenshot({path:join(output,'billing-setup-390.png'),fullPage:true});
   await owner.getByRole('button',{name:'Save billing setup',exact:true}).click();
   await owner.getByRole('button',{name:'Configure billing',exact:true}).waitFor();
+  await owner.getByRole('button',{name:'Export encrypted backup',exact:true}).click();
+  const backupForm=owner.getByRole('form',{name:'Encrypted backup export'});
+  await backupForm.getByLabel('Backup passphrase · at least 16 characters').fill('browser-only recovery fixture secret');
+  await backupForm.getByLabel('Repeat backup passphrase').fill('different recovery fixture secret');
+  await backupForm.getByRole('button',{name:'Download backup',exact:true}).click();
+  await backupForm.getByText('The two passphrases do not match. Enter them again.').waitFor();
+  await backupForm.getByLabel('Repeat backup passphrase').fill('browser-only recovery fixture secret');
+  assert.equal(await owner.getByRole('button',{name:'Menu catalog',exact:true}).isDisabled(),true);
+  await accessibility(owner);
+  await owner.screenshot({path:join(output,'backup-export-390.png'),fullPage:true});
+  const download=owner.waitForEvent('download');
+  await backupForm.getByRole('button',{name:'Download backup',exact:true}).click();
+  const heartbeatStarted=Date.now();
+  assert.equal((await owner.request.get('http://127.0.0.1:31964/api/service')).status(),200);
+  assert.ok(Date.now()-heartbeatStarted<2000,'Backup blocked service requests');
+  const backupDownload=await download;
+  assert.match(backupDownload.suggestedFilename(),/^restaurant-backup-\d+\.rpb$/);
+  const backupFile=join(output,'fixture-backup.rpb');await backupDownload.saveAs(backupFile);
+  const inspected=await inspectEncryptedBackup(backupFile,'browser-only recovery fixture secret',scratch);
+  const snapshot=openStore(inspected.path);
+  try{assert.equal(snapshot.prepare('SELECT count(*) AS n FROM sessions').get().n,0);}finally{snapshot.close();}
+  await inspected.cleanup();
+  await owner.getByText('Download started.',{exact:false}).waitFor();
   const cashier=await login('billing',390);
   await cashier.getByRole('button',{name:'Table checks',exact:true}).click();
   await cashier.getByRole('button',{name:'Create built-in bill',exact:true}).click();
@@ -133,6 +157,16 @@ try {
   await credit.getByRole('button',{name:'Print credit note',exact:true}).click();
   assert.equal(db.prepare('SELECT count(*) AS n FROM built_in_credit_notes').get().n,1);
   await accessibility(cashier);
+  db.prepare('INSERT INTO recovery_state VALUES(1,?,?,?,?,NULL)').run(Date.now(),'a'.repeat(64),'[]','Browser recovery fixture');
+  await owner.reload();
+  const review=owner.getByRole('form',{name:'Review restored outlet'});
+  await review.waitFor();
+  await accessibility(owner);
+  await owner.screenshot({path:join(output,'recovery-review-390.png'),fullPage:true});
+  await review.getByLabel('I have reconciled the restored orders, payments and refunds.').check();
+  await review.getByRole('button',{name:'Record owner review and resume service',exact:true}).click();
+  await review.waitFor({state:'hidden'});
+  assert.equal(db.prepare("SELECT count(*) AS n FROM configuration_events WHERE action='recovery-reviewed'").get().n,1);
   assert.deepEqual(errors,[]);
-  console.log('Billing browser passed: owner setup, table/counter invoices, lost response, payment, saved history, partial credit printing, accessibility, 320–1280 px, and 58/80 mm/A4 PDFs.');
+  console.log('Billing/recovery browser passed: encrypted export/inspection, responsive service, owner recovery review, table/counter invoices, safe retries, saved history, credit printing, accessibility, 320–1280 px and receipt/A4 PDFs.');
 } finally {await browser?.close();await app.close();db.close();rmSync(scratch,{recursive:true});}

@@ -11,12 +11,15 @@ Restaurant Portal is a single-outlet restaurant service system in active develop
 | Guest website | Classic and Photo-led menus, availability, phone sign-in, offer claims, and receipt-linked feedback |
 | Distribution | Windows installer packaging and a separate hosted guest service |
 | Built-in billing · development | Non-GST receipts, GST invoices, bills of supply, saved-bill search, counter credit notes and native receipt/A4 printing |
+| Recovery · development | Manual encrypted export, offline unlinked-outlet restoration, preserved access/numbering boundaries and owner review before service resumes |
 
 The code has been tested with local browser and service fixtures. One iQOO phone/Windows table-order, kitchen, billing and table-release walkthrough passed with the user. The outlet pilot still needs a second physical phone, outage and reboot checks, a physical printer, the selected billing product, production staging, and real SMS delivery.
 
 Version 0.2.0 adds Table service, pay-first Counter service, and Both as outlet modes. The [service-mode plan](BUILD_PLAN.md#service-modes-included-in-the-first-release) tracks their acceptance checks and remaining outlet verification.
 
 Version 0.3.0 adds built-in billing, invoice history, counter credit notes and native receipt/A4 printing. Its Windows kit passed isolated installation, invoice persistence, update and rollback checks. See [the verification log](VERIFICATION.md#windows-billing-package-030--23-november-2026) for exact scope and remaining pilot gates. This is an ongoing development project, not a production deployment.
+
+Version 0.4.0 adds [encrypted backup and controlled recovery](#backups-and-recovery--040), with explicit gates for staff access, invoice series and owner reconciliation. Development and recovery commands require Node 22.16 or newer; use the bundled runtime for a consistent Windows environment. Physical recovery and coordinated hosted recovery remain required before pilot sign-off.
 
 ### Built-in bills in the current development build
 
@@ -68,7 +71,7 @@ Table orders stay locked until paid and ready or until an owner records a resolu
 - If a payment save times out, check the pending or paid order and the external receipt before retrying. Use the original pending order. Resolve stale changes from the refreshed state.
 - If the local service fails, inspect its service logs, available disk space, and Windows task status. Stop service before attempting database repair. Preserve the original database and its associated SQLite files for authorized investigation.
 - Before an update, follow the Windows installer procedure below and retain the previous compatible installer. Verify sign-in, an order, and a public menu update after the update.
-- The application currently has no supported automated backup-and-restore workflow. The local database contains operational history. Loss of its drive can lose that history. A production retention and recovery decision remains a release requirement.
+- Owners can manually export encrypted backups in 0.4.0, and the Windows kit supports controlled offline restoration of unlinked outlets. Automated scheduling/retention and coordinated hosted recovery remain release requirements. The local database contains operational history; keep verified copies away from its drive.
 
 Deploy the hosted service and provision production credentials after local verification and the required outlet checks. The build plan tracks trusted HTTPS, guest-network isolation, physical printing, real SMS delivery, and staging verification.
 
@@ -225,6 +228,41 @@ The code expires 14 days after payment. While offline, the counter can still iss
 
 The admin can open **Outlet overview → Private feedback** for the latest 100 responses. The inbox requires the hosted connection. It displays the rating, comment, and time. Apply the hosted database update with `npm.cmd run setup:hosted -- --schema-only` before enabling the feedback flow.
 
+## Backups and recovery · 0.4.0
+
+Use Node 22.16 or newer for development; the Windows kit includes Node 22.23.4. The native [SQLite backup API](https://nodejs.org/api/sqlite.html) provides a consistent snapshot while the outlet is running. Snapshot processing and encryption run in a worker, with a 512 MB database limit and a two-minute job limit. The service permits one export at a time and applies a 30-second cooldown.
+
+As `admin`, open **Outlet overview → Backups → Export encrypted backup**. Enter a separate 16–256 character passphrase twice and select **Download backup**. Save the `.rpb` file and keep a verified copy away from the PC. Keep the passphrase separately, preferably in a password manager; it is not recoverable from the application. This is a manual export, not scheduled backup or automatic retention. Agree the destination, schedule and retained versions with the pilot owner. Keep the matching Windows kit available for recovery.
+
+The archive uses native AES-256-GCM with random salt/nonce, scrypt (`N=32768,r=8,p=3`) and authenticated format/schema/time/size/hash metadata. Its database includes staff password hashes and operational history, so treat it as private even though it is encrypted. Active browser sessions are removed only from the snapshot. Partial plaintext work stays within the protected data folder and is removed after normal success/failure. Hard shutdown can leave private scratch files in `data/.backup-work`; remove stale work only with the service stopped and after preserving recovery evidence. No settings-file secrets or TLS private keys are exported; protect those configuration materials separately.
+
+### Offline restore on an installed Windows outlet
+
+Restore is supported for an **unlinked outlet**: no hosted publication/offer/claim history or configuration. The tool refuses detected hosted state, even if publication is currently disabled. If the outlet has ever used hosted services, including setup after the chosen backup, use coordinated recovery; do not remove history or settings to bypass the check. That recovery procedure remains a release gate.
+
+1. Stop the installed launcher/service and all processes using this outlet database. Open PowerShell with the Windows permissions needed for the installation. Keep the original installation and current data; do not delete an unreadable database to force recovery. An unreadable current database needs assisted recovery.
+2. Set the installation root and backup path, then review the archive. The wrapper checks the launcher lock and database handles before asking for the passphrase. The passphrase is hidden and passed over stdin, never in the command line.
+
+```powershell
+$restoreRoot = Join-Path $env:ProgramData 'RestaurantPortal'
+$restoreFile = 'D:\RestaurantBackups\chosen-backup.rpb'
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $restoreRoot 'Restore-Backup.ps1') -Root $restoreRoot -Backup $restoreFile
+```
+
+3. Review the snapshot start time and SHA-256. Later orders, payments, refunds and access changes may be absent from that snapshot. Confirm the printed hash and select two invoice/credit-note series that have **never been used by this outlet**, including records outside the backup. Replace the examples and placeholder below; `-Mode restore` replaces current operational data.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $restoreRoot 'Restore-Backup.ps1') -Root $restoreRoot -Backup $restoreFile -Mode restore -ConfirmHash '<exact lowercase hash printed by review>' -InvoiceSeries R4 -CreditSeries C4
+```
+
+The tool authenticates/decrypts the archive, validates schema/integrity/outlet identity, prepares a candidate, and flushes a `data/pre-restore-*.sqlite` copy before atomic replacement. The original pathname is kept until replacement. A failed final write leaves the current database and preserved copy available. Keep the service stopped after an error and review it before retrying. Pre-restore copies are **unencrypted** and must remain in the protected data directory.
+
+When current data is readable, its newer staff password/access settings are preserved. For a replacement PC with no current database, install the matching kit **without `-Demo`**, and restore **before first launch or account provisioning**. All backup accounts will be disabled; the tool writes a fresh owner login to a protected `data/recovery-owner-*.txt` file and reports only its path. Read it privately, save the login safely and delete that handoff file. Review/reset staff access before enabling accounts.
+
+4. Start the installed launcher again and sign in as owner. Previous sessions will not work. Service changes and hosted publishers remain paused. Compare the restored data against the preserved copy, external receipts/refunds and any later records; then use **Review restored outlet → Record owner review and resume service**. The acknowledgment is tied to the specific restoration and audited. Original invoices keep their original contents; new invoices and credit notes use the new series. Known old series stay reserved.
+
+Never test a restore against the running preview or live restaurant. First exercise it in a separate sample installation with separate ports and disposable data. Physical off-device recovery, power interruption, retention automation and coordinated hosted recovery remain pending.
+
 ## Checks
 
 ```powershell
@@ -232,6 +270,7 @@ npm.cmd test
 npm.cmd run test:startup
 npm.cmd run test:browser
 npm.cmd run test:billing-browser
+npm.cmd run test:recovery
 ```
 
 Run `npm.cmd run test:all` to execute these checks in order. Set `RESTAURANT_TEST_OPENSSL` to the OpenSSL executable path to include the HTTPS handshake and secure-cookie check. It creates and discards a temporary test certificate without changing the Windows trust store.
