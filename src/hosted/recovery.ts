@@ -102,8 +102,9 @@ export async function coordinateHostedRecovery(pool: Pool, slug: string, authori
       SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING`, [slug, retiredOffers]);
     await client.query('UPDATE outlet_offer_claims SET invalidated_at = clock_timestamp() WHERE outlet = $1 AND invalidated_at IS NULL', [slug]);
     await client.query('DELETE FROM online_pickup_quotes WHERE outlet=$1', [slug]);
-    await client.query("UPDATE online_pickup_requests SET status='expired' WHERE outlet=$1 AND status='pending_acceptance'", [slug]);
-    await client.query('UPDATE online_pickup_channels SET enabled=false,heartbeat_at=NULL,installation=$2 WHERE outlet=$1', [slug, request.newInstallation]);
+    await client.query(`UPDATE online_pickup_requests SET status=CASE WHEN status='awaiting_payment' THEN 'recovery_required' ELSE 'expired' END,
+      revision=revision+1 WHERE outlet=$1 AND status IN ('pending_acceptance','awaiting_payment')`, [slug]);
+    await client.query('UPDATE online_pickup_channels SET enabled=false,heartbeat_at=NULL,pricing=NULL,installation=$2 WHERE outlet=$1', [slug, request.newInstallation]);
     // Retain the last menu and its truthful published timestamp until the restored counter republishes.
     await client.query('UPDATE hosted_outlets SET publication_installation = $2, version = $3 WHERE slug = $1',
       [slug, request.newInstallation, menuVersionNext - 1]);

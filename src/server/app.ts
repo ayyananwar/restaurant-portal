@@ -7,6 +7,7 @@ import { maxMenuPhotoBytes, paperOrderModes, paymentMethods, reportPeriods, type
 import { reopenSplit, saveSplit } from './check-splits.js';
 import { quoteBuiltInBill, quoteCoupon, recordBuiltInBill, recordReceipt, releaseTable } from './receipt-handoff.js';
 import { readBillingProfile, saveBillingProfile } from './billing.js';
+import { billingProfileSchema } from '../shared/billing.js';
 import type { BillBuyer, BillingProfile, BuiltInBillRequest } from '../shared/contracts.js';
 import { createCoupon, readCouponRedemptions, readCoupons, setCouponEnabled } from './coupons.js';
 import { correctReadyDish, requestDishChange, resolveDishChange } from './order-changes.js';
@@ -265,14 +266,8 @@ export function buildApp(db: DatabaseSync, options: {
     } finally {if(!streaming)backupBusy=false;}
   });
 
-  app.put<{Body:BillingProfile}>('/api/outlet/billing', { schema: { body: {
-    type:'object', additionalProperties:false,
-    required:['enabled','revision','legalName','address','stateCode','gstin','taxMode','rateBasisPoints','pricesIncludeTax','classification','series','testMode'],
-    properties:{enabled:{type:'boolean'},revision:revisionSchema,legalName:{type:'string',maxLength:150},address:{type:'string',maxLength:600},
-      stateCode:{type:'string',pattern:'^[0-9]{2}$'},gstin:{type:'string',maxLength:15},taxMode:{enum:['none','gst','composition']},
-      rateBasisPoints:{type:'integer',minimum:0,maximum:2800},pricesIncludeTax:{type:'boolean'},classification:{type:'string',maxLength:8},
-      series:{type:'string',pattern:'^[A-Z0-9]{1,4}$'},creditSeries:{type:'string',pattern:'^[A-Z0-9]{1,4}$'},testMode:{type:'boolean'}}
-  }}},(request,reply)=>{saveBillingProfile(db,requireStaff(request,'admin'),request.body);return reply.code(204).send();});
+  app.put<{Body:BillingProfile}>('/api/outlet/billing', { schema: { body: billingProfileSchema } },
+    (request,reply)=>{saveBillingProfile(db,requireStaff(request,'admin'),request.body);return reply.code(204).send();});
 
   app.get<{Querystring:{offset?:string;search?:string}}>('/api/bills',{schema:{querystring:{
     type:'object',additionalProperties:false,properties:{offset:{type:'string',pattern:'^(0|[1-9][0-9]{0,6})$'},search:{type:'string',maxLength:32}}

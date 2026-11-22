@@ -9,6 +9,10 @@ import { addGuestAccountRoutes } from './guest-account.js';
 import type { GuestAccountOptions } from './phone-verify.js';
 import { syncOutletOffers, type OfferSync } from './offers.js';
 import { OnlineOrderingError } from './online-ordering.js';
+import { connectorPickup, decidePickup, pickupInbox, reviewPickup, syncPickupPricing } from './pickup-acceptance.js';
+import { billingProfileSchema } from '../shared/billing.js';
+import type { BillingProfile } from '../shared/contracts.js';
+import type { PickupDecision } from '../shared/online-ordering.js';
 
 const clientDir = new URL('../client/', import.meta.url);
 const guestFile = 'guest-menu.html';
@@ -77,6 +81,52 @@ export async function buildHostedApp(pool: Pool, tls?: { key: Buffer; cert: Buff
     }
     if (contentType && request.headers['content-type']?.split(';')[0] !== contentType) return reply.code(415).send();
   };
+
+  const uuid = { type: 'string', pattern: '^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$' };
+  const requestParams = params({ slug, id: uuid });
+  const connectorLease = (request: FastifyRequest) => publicationLease(request.headers.authorization, request.headers['x-outlet-installation']);
+  app.put<{ Params: Outlet; Body: BillingProfile }>('/api/publish/:slug/pickup-pricing', {
+    onRequest: publish('application/json'), bodyLimit: 8192, schema: { params: outletParams, body: billingProfileSchema }
+  }, async (request, reply) => {
+    if (!accounts) return reply.code(503).send();
+    await syncPickupPricing(pool, request.params.slug, request.body, connectorLease(request));
+    return reply.code(204).send();
+  });
+  app.get<{ Params: Outlet; Querystring: { after?: string } }>('/api/publish/:slug/pickup-requests', {
+    onRequest: publish(), schema: { params: outletParams, querystring: { type: 'object', additionalProperties: false, properties: { after: uuid } } }
+  }, async (request, reply) => {
+    if (!accounts) return reply.code(503).send();
+    return pickupInbox(pool, request.params.slug, connectorLease(request), request.query.after);
+  });
+  app.post<{ Params: Outlet & { id: string }; Body: { revision: number } }>('/api/publish/:slug/pickup-requests/:id/review', {
+    onRequest: publish('application/json'), bodyLimit: 512, schema: { params: requestParams, body: {
+      type: 'object', additionalProperties: false, required: ['revision'], properties: { revision: positiveInteger }
+    } }
+  }, async (request, reply) => {
+    if (!accounts) return reply.code(503).send();
+    return reviewPickup(pool, request.params.slug, request.params.id, request.body.revision, connectorLease(request));
+  });
+  app.get<{ Params: Outlet & { id: string } }>('/api/publish/:slug/pickup-requests/:id', {
+    onRequest: publish(), schema: { params: requestParams }
+  }, async (request, reply) => {
+    if (!accounts) return reply.code(503).send();
+    return connectorPickup(pool, request.params.slug, request.params.id, connectorLease(request));
+  });
+  app.post<{ Params: Outlet & { id: string }; Body: PickupDecision }>('/api/publish/:slug/pickup-requests/:id/decision', {
+    onRequest: publish('application/json'), bodyLimit: 8192, schema: { params: requestParams, body: {
+      type: 'object', additionalProperties: false,
+      required: ['requestId','expectedRevision','actor','decision','reason','readyAt','reviewHash'], properties: {
+        requestId: uuid, expectedRevision: positiveInteger, decision: { enum: ['accept','reject'] }, reason: text(0,500),
+        readyAt: nullable({ ...positiveInteger, maximum: 8_640_000_000_000_000 }), reviewHash: nullable(key),
+        actor: { type: 'object', additionalProperties: false, required: ['id','name','role'], properties: {
+          id: positiveInteger, name: text(1,100), role: { enum: ['admin','billing','waiter','kitchen'] }
+        } }
+      }
+    } }
+  }, async (request, reply) => {
+    if (!accounts) return reply.code(503).send();
+    return decidePickup(pool, request.params.slug, request.params.id, request.body, connectorLease(request));
+  });
 
   const offerFields = {
     id: { type: 'string', pattern: '^[A-Z0-9][A-Z0-9-]{2,23}$' }, title: text(1, 100),

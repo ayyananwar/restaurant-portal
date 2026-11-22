@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { BillBuyer, BillQuote, BillingProfile, BillSnapshot, CheckIdentity, CheckItem, Staff } from '../shared/contracts.js';
-import { billAmounts, defaultBillingProfile, roundRatio, stateNames, validGstin } from '../shared/billing.js';
+import { billAmounts, billingProfileIssue, defaultBillingProfile, normalizeBillingProfile, roundRatio, stateNames, validGstin } from '../shared/billing.js';
 import { activeSplit, WorkflowError } from './store.js';
 import { couponForTotal } from './coupons.js';
 
@@ -12,18 +12,9 @@ export function readBillingProfile(db:DatabaseSync):BillingProfile {
 
 export function saveBillingProfile(db:DatabaseSync,actor:Staff,input:BillingProfile) {
   if(actor.role!=='admin') throw new WorkflowError(403,'Only an owner can configure billing.');
-  const profile={...input,legalName:input.legalName.trim(),address:input.address.trim(),gstin:input.gstin.trim().toUpperCase(),
-    series:input.series.trim().toUpperCase(),creditSeries:(input.creditSeries??'CN').trim().toUpperCase(),classification:input.classification.trim()};
-  if(profile.enabled) {
-    if(!profile.legalName||!profile.address||!stateNames[profile.stateCode]) throw new WorkflowError(400,'Enter the business name, address, and state.');
-    if(profile.taxMode!=='none'&&(!validGstin(profile.gstin)||profile.gstin.slice(0,2)!==profile.stateCode||!/^\d{4,8}$/.test(profile.classification))) {
-      throw new WorkflowError(400,'Enter the correct GSTIN, matching state, and HSN/SAC classification.');
-    }
-    if(profile.taxMode==='none'&&profile.gstin) throw new WorkflowError(400,'Choose GST or bill of supply for a registered business.');
-    if((profile.taxMode!=='gst'&&profile.rateBasisPoints!==0)||(profile.taxMode==='gst'&&profile.rateBasisPoints<=0)) {
-      throw new WorkflowError(400,'Enter the applicable GST percentage, or use zero for non-GST and bill-of-supply billing.');
-    }
-  }
+  const profile=normalizeBillingProfile(input);
+  const issue=billingProfileIssue(profile);
+  if(issue) throw new WorkflowError(400,issue);
   db.exec('BEGIN IMMEDIATE');
   try {
     const prior=readBillingProfile(db);

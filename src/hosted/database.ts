@@ -156,8 +156,25 @@ export async function prepareHostedStore(pool: Pool) {
       UNIQUE (outlet, account_id, request_id),
       UNIQUE (outlet, quote_id)
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS online_pickup_one_pending ON online_pickup_requests(outlet,account_id)
-      WHERE status='pending_acceptance';
+    ALTER TABLE online_pickup_channels ADD COLUMN IF NOT EXISTS pricing JSONB;
+    ALTER TABLE online_pickup_requests ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 1;
+    ALTER TABLE online_pickup_requests ADD COLUMN IF NOT EXISTS decision JSONB;
+    ALTER TABLE online_pickup_requests DROP CONSTRAINT IF EXISTS online_pickup_requests_status_check;
+    ALTER TABLE online_pickup_requests ADD CONSTRAINT online_pickup_requests_status_check
+      CHECK(status IN ('pending_acceptance','awaiting_payment','rejected','expired','recovery_required'));
+    DROP INDEX IF EXISTS online_pickup_one_pending;
+    CREATE UNIQUE INDEX IF NOT EXISTS online_pickup_one_open ON online_pickup_requests(outlet,account_id)
+      WHERE status IN ('pending_acceptance','awaiting_payment','recovery_required');
+    CREATE TABLE IF NOT EXISTS online_pickup_decisions (
+      outlet TEXT NOT NULL REFERENCES hosted_outlets(slug),
+      request_id UUID NOT NULL,
+      order_id UUID NOT NULL REFERENCES online_pickup_requests(id),
+      payload_hash TEXT NOT NULL,
+      actor JSONB NOT NULL,
+      decision JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+      PRIMARY KEY(outlet,request_id)
+    );
   `);
 }
 

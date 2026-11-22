@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { GuestMenuItem } from '../shared/contracts.js';
-import type { PickupCart, PickupQuote, PickupRequest } from '../shared/online-ordering.js';
+import type { PickupAcceptance, PickupCart, PickupQuote, PickupRequest } from '../shared/online-ordering.js';
 import { installationPattern, outletWrite, type PublicationLease } from './database.js';
 
 export class OnlineOrderingError extends Error {
@@ -9,7 +9,7 @@ export class OnlineOrderingError extends Error {
 }
 const fail = (statusCode: number, message: string) => new OnlineOrderingError(statusCode, message);
 const uuid = new RegExp(installationPattern);
-const cleanText = (value: unknown, maximum: number, multiline = false) => typeof value === 'string' && value.length <= maximum
+export const cleanText = (value: unknown, maximum: number, multiline = false) => typeof value === 'string' && value.length <= maximum
   && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\uD800-\uDFFF]/u.test(value)
   && (multiline || !/[\r\n\t]/.test(value));
 
@@ -29,7 +29,7 @@ async function accountFor(client: Pick<Pool, 'query'>, session: string) {
   return rows[0].account_id;
 }
 
-async function availableChannel(client: PoolClient, slug: string) {
+export async function availableChannel(client: PoolClient, slug: string) {
   const { rows } = await client.query<{ installation: string; revision: string; version: string; items: GuestMenuItem[]; now_ms: string }>(`
     SELECT c.installation,c.revision,o.version,o.items,floor(extract(epoch FROM clock_timestamp())*1000)::bigint AS now_ms
     FROM online_pickup_channels c JOIN hosted_outlets o ON o.slug=c.outlet
@@ -40,8 +40,8 @@ async function availableChannel(client: PoolClient, slug: string) {
 }
 
 async function expirePending(client: PoolClient, slug: string, account: string) {
-  await client.query(`UPDATE online_pickup_requests SET status='expired'
-    WHERE outlet=$1 AND account_id=$2 AND status='pending_acceptance' AND expires_at<=clock_timestamp()`, [slug, account]);
+  await client.query(`UPDATE online_pickup_requests SET status='expired',revision=revision+1
+    WHERE outlet=$1 AND account_id=$2 AND status IN ('pending_acceptance','awaiting_payment') AND expires_at<=clock_timestamp()`, [slug, account]);
 }
 
 // Called by the future authenticated counter connector, never by a guest. A fresh
@@ -67,8 +67,8 @@ export async function quotePickup(pool: Pool, slug: string, session: string, car
     const account = await accountFor(client, session);
     const channel = await availableChannel(client, slug);
     await expirePending(client, slug, account);
-    if ((await client.query("SELECT 1 FROM online_pickup_requests WHERE outlet=$1 AND account_id=$2 AND status='pending_acceptance'", [slug, account])).rowCount) {
-      throw fail(409, 'You already have an order request waiting for the restaurant.');
+    if ((await client.query("SELECT 1 FROM online_pickup_requests WHERE outlet=$1 AND account_id=$2 AND status IN ('pending_acceptance','awaiting_payment','recovery_required')", [slug, account])).rowCount) {
+      throw fail(409, 'An earlier order still needs payment or restaurant review.');
     }
     const lines = cart.lines.map(line => {
       const item = channel.items.find(item => item.id === line.menuId);
@@ -87,10 +87,14 @@ export async function quotePickup(pool: Pool, slug: string, session: string, car
   });
 }
 
-type RequestRow = { id: string; quote_id: string; status: 'pending_acceptance' | 'expired'; created_at: Date; expires_at: Date; expired: boolean; snapshot: PickupQuote };
-const requestView = (row: RequestRow): PickupRequest => ({ id: row.id, quote: row.snapshot,
-  status: row.status === 'pending_acceptance' && row.expired ? 'expired' : row.status,
-  createdAt: row.created_at.getTime(), expiresAt: row.expires_at.getTime() });
+export type RequestRow = { id: string; quote_id: string; installation: string; revision: string; status: PickupRequest['status'];
+  created_at: Date; expires_at: Date; expired: boolean; snapshot: PickupQuote;
+  decision: { acceptance?: PickupAcceptance; rejection?: { reason: string; at: number } } | null };
+export const requestView = (row: RequestRow): PickupRequest => ({ id: row.id, quote: row.snapshot, revision: Number(row.revision),
+  status: ['pending_acceptance','awaiting_payment'].includes(row.status) && row.expired ? 'expired' : row.status,
+  createdAt: row.created_at.getTime(), expiresAt: row.expires_at.getTime(),
+  ...(row.decision?.acceptance ? { acceptance: row.decision.acceptance } : {}),
+  ...(row.decision?.rejection ? { rejection: row.decision.rejection } : {}) });
 
 export async function submitPickup(pool: Pool, slug: string, session: string, requestId: string, quoteId: string): Promise<PickupRequest> {
   if (!uuid.test(requestId) || !uuid.test(quoteId)) throw fail(400, 'Invalid order request.');
@@ -109,7 +113,7 @@ export async function submitPickup(pool: Pool, slug: string, session: string, re
       throw fail(409, 'The menu or ordering settings changed, or this review expired. Review your order again.');
     }
     await expirePending(client, slug, account);
-    if ((await client.query("SELECT 1 FROM online_pickup_requests WHERE outlet=$1 AND account_id=$2 AND status='pending_acceptance'", [slug, account])).rowCount) throw fail(409, 'You already have a pending order request.');
+    if ((await client.query("SELECT 1 FROM online_pickup_requests WHERE outlet=$1 AND account_id=$2 AND status IN ('pending_acceptance','awaiting_payment','recovery_required')", [slug, account])).rowCount) throw fail(409, 'An earlier order still needs payment or restaurant review.');
     const result = await client.query<RequestRow>(`INSERT INTO online_pickup_requests(id,outlet,account_id,request_id,quote_id,installation,status,snapshot,expires_at)
       VALUES($1,$2,$3,$4,$5,$6,'pending_acceptance',$7,clock_timestamp()+interval '10 minutes') RETURNING *,expires_at<=clock_timestamp() AS expired`,
     [randomUUID(), slug, account, requestId, quoteId, channel.installation, JSON.stringify(quote.snapshot)]);

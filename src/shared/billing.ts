@@ -15,6 +15,32 @@ export const defaultBillingProfile: BillingProfile = {
   rateBasisPoints:0,pricesIncludeTax:true,classification:'',series:'RP',creditSeries:'CN',testMode:true
 };
 
+export const billingProfileSchema = {
+  type:'object', additionalProperties:false,
+  required:['enabled','revision','legalName','address','stateCode','gstin','taxMode','rateBasisPoints','pricesIncludeTax','classification','series','testMode'],
+  properties:{enabled:{type:'boolean'},revision:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER},legalName:{type:'string',maxLength:150},address:{type:'string',maxLength:600},
+    stateCode:{type:'string',pattern:'^[0-9]{2}$'},gstin:{type:'string',maxLength:15},taxMode:{enum:['none','gst','composition']},
+    rateBasisPoints:{type:'integer',minimum:0,maximum:2800},pricesIncludeTax:{type:'boolean'},classification:{type:'string',maxLength:8},
+    series:{type:'string',pattern:'^[A-Z0-9]{1,4}$'},creditSeries:{type:'string',pattern:'^[A-Z0-9]{1,4}$'},testMode:{type:'boolean'}}
+};
+
+export function normalizeBillingProfile(input: BillingProfile): BillingProfile & { creditSeries: string } {
+  return {...input,legalName:input.legalName.trim(),address:input.address.trim(),gstin:input.gstin.trim().toUpperCase(),
+    series:input.series.trim().toUpperCase(),creditSeries:(input.creditSeries??'CN').trim().toUpperCase(),classification:input.classification.trim()};
+}
+
+export function billingProfileIssue(profile: BillingProfile): string | undefined {
+  if (!profile.enabled) return;
+  if (!profile.legalName || !profile.address || !stateNames[profile.stateCode]) return 'Enter the business name, address, and state.';
+  if (profile.taxMode !== 'none' && (!validGstin(profile.gstin) || profile.gstin.slice(0,2) !== profile.stateCode || !/^\d{4,8}$/.test(profile.classification))) {
+    return 'Enter the correct GSTIN, matching state, and HSN/SAC classification.';
+  }
+  if (profile.taxMode === 'none' && profile.gstin) return 'Choose GST or bill of supply for a registered business.';
+  if ((profile.taxMode !== 'gst' && profile.rateBasisPoints !== 0) || (profile.taxMode === 'gst' && profile.rateBasisPoints <= 0)) {
+    return 'Enter the applicable GST percentage, or use zero for non-GST and bill-of-supply billing.';
+  }
+}
+
 export function validGstin(value:string) {
   if(!/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(value)||!stateNames[value.slice(0,2)]) return false;
   const digits='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';

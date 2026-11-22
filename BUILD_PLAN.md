@@ -278,6 +278,9 @@ The owner approved moving online ordering into active development on 23 November
 - [ ] Add the signed-in guest cart to the single guest menu: add/remove dishes, quantities, item notes, order notes, name, review, validation recovery and safe refresh/retry. Keep local dine-in browsing waiter-led; only entitled hosted outlets expose online actions.
 - [ ] Add an authenticated outbound counter connector, local inbox and acknowledgment protocol. Preserve requests through restart and lost responses. Display online orders separately from table checks and counter tokens; never create duplicate kitchen entries.
 - [ ] Let authorized restaurant staff accept or reject a fresh request. Record actor, revision, reason and promised pickup time. Acceptance produces an immutable final price review, including applicable taxes, discounts and fees; customers confirm changed totals before payment.
+  - [x] Implement the hosted connector APIs for paginated inbox polling, individual request reconciliation, billing-profile publication, current-price review and atomic accept/reject decisions. Reuse existing billing validation/calculations; preserve accepted totals and audited retry identities through restart.
+  - [ ] Connect the local Windows outbox/inbox and owner/billing authentication to those APIs, then add the counter decision screens. The hosted API trusts the authenticated connector's staff attribution; it is not an independent staff login.
+  - [ ] Add customer review/confirmation of the accepted total and payment expiry. Current acceptance supports pickup with the configured single billing classification/rate; coupon discounts and extra fees are zero until their own reservation/validation flow is implemented.
 - [ ] Add account-linked online coupons with reservation, expiry and single redemption across online/offline flows. Reconcile claims centrally before approval; an old backup or disconnected counter cannot revive a used claim.
 
 ### Payment, preparation and collection
@@ -301,6 +304,7 @@ The owner approved moving online ordering into active development on 23 November
 ### Integration and release gates
 
 - [ ] Complete the recovery journal/startup gates from Phase 2C. Recovery must pause ordering, invalidate older reviews, expire untouched pending requests and fence the old connector. Reconcile accepted/paid requests and financial outcomes before resuming; never reset paid online orders from an older local backup.
+  - [x] Preserve the accepted price snapshot and mark accepted requests `recovery_required` during hosted recovery. Keep them visible to the replacement connector and block another checkout for that customer until reviewed. Require pricing to be republished; do not silently discard a possible payment outcome.
 - [ ] Test API permissions, cross-outlet/account access, malformed inputs, price changes, stale settings, disabled/offline channels, request expiry, simultaneous checkout, duplicate/lost requests, payment/webhook replay, refunds, reconnect, restart and failure after external payment.
 - [ ] Review guest/counter/kitchen flows at 320/390/768/1280 px with keyboard, touch and accessibility checks. Preserve the current design system and avoid a second cart/order implementation where existing components fit.
 - [ ] Run end-to-end pickup and delivery tests with a simulated provider and disposable PostgreSQL/SQLite. Then perform test-mode provider checks, configured-deployment security review and the deferred physical walkthrough. Package matched local/hosted builds and deploy only after sign-off.
