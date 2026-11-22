@@ -406,7 +406,8 @@ test('PostgreSQL hosted menu, HTTPS publication and guest browser flow', { timeo
     await page.getByText('Sold out', { exact: true }).waitFor();
     assert.ok(await page.locator('time').getAttribute('datetime'));
     assert.equal(await page.getByText('Local preview').count(), 0);
-    assert.ok(await page.locator('.guest-photo-led').count());
+    assert.equal(await page.locator('.guest-page').getAttribute('class'), 'guest-page');
+    assert.equal(await page.getByRole('navigation', { name: 'Preview theme' }).count(), 0);
     assert.equal(await page.getByRole('img', { name: 'Ginger chai' }).evaluate(img => img.decode().then(() => img.naturalWidth > 0)), true);
     const guestAccount = (action, data, headers = {}) => fetch(`${origin}/api/guest-account/${action}`, {
       method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(data)
@@ -607,7 +608,7 @@ test('PostgreSQL hosted menu, HTTPS publication and guest browser flow', { timeo
     }
     await page.goto(`${origin}/r/other?theme=photo-led`);
     await page.getByRole('heading', { name: 'Other Café', exact: true }).waitFor();
-    assert.ok(await page.locator('.guest-classic').count());
+    assert.equal(await page.locator('.guest-page').getAttribute('class'), 'guest-page');
     await page.goto(`${origin}/r/unpublished`);
     await page.getByText('This menu is unavailable. Ask the restaurant for its current menu.').waitFor();
     assert.deepEqual(unexpected, []);

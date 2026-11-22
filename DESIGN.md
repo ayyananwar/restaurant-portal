@@ -6,7 +6,7 @@ Version 2.1 · Staff design specification. The supplied `resimg` references defi
 
 Use Telegram as the interaction reference for staff work. Give staff compact, readable lists, search where they expect it, a clear selected row, and a stable place to act. On a phone, show the current task in one pane. On a PC, keep context and the active task visible together. The roles keep the same words, status meanings, and actions at every width.
 
-Use warm ivory surfaces, navy primary actions, gold section accents, and status colors paired with text. Every admin page uses the full-width outlet overview banner and navigation above its content. Show the current admin page in navy with a programmatic current-page state. Arrange the same six destinations in two columns on phones, three on tablets, and six when there is enough desktop width. Waiter, kitchen, and counter workspaces use a navy sidebar on desktop and a compact navigation strip on phones. The two guest themes retain their own restaurant-facing palettes.
+Use warm ivory surfaces, navy primary actions, gold section accents, and status colors paired with text. Every admin page uses the full-width outlet overview banner and navigation above its content. Show the current admin page in navy with a programmatic current-page state. Arrange the same six destinations in two columns on phones, three on tablets, and six when there is enough desktop width. Waiter, kitchen, and counter workspaces use a navy sidebar on desktop and a compact navigation strip on phones. The guest menu uses one restaurant-facing palette.
 
 The sign-in, outlet overview, table service, order picker, kitchen queue, counter checks, menu catalog, coupons, and waiter activity follow the corresponding reference layouts. The supplied Dish Availability file duplicates Counter Checks, so use the catalog layout with kitchen controls there. Carry the same visual system into QR cards, exports, paper entry, feedback, and other staff screens without separate references. Use live values for totals, statuses, and counts. Optional demo artwork comes from the supplied images. Show outlet-uploaded photos in production.
 
@@ -22,7 +22,7 @@ The sign-in, outlet overview, table service, order picker, kitchen queue, counte
 
 ## Colors
 
-Use the following light-theme values for staff screens. Guest themes may override brand and surface tokens after testing contrast. Keep status meanings identical across guest and staff surfaces. Theme changes belong in the token layer, with shared primitives consuming semantic names.
+Use the following light-theme values for staff screens. The guest menu may override brand and surface tokens after testing contrast. Keep status meanings identical across guest and staff surfaces. Theme changes belong in the token layer, with shared primitives consuming semantic names.
 
 | Role | Value | Use |
 | --- | --- | --- |
@@ -176,12 +176,12 @@ These screens follow the [service-mode scope](BUILD_PLAN.md#service-modes-includ
 
 ### Guest themes
 
-- Both guest themes use the supplied restaurant-menu references. Use a dark navy hero with a copper biryani photograph, gold accents, an ivory canvas, illustrated category links, and rounded dish rows. **Classic** uses compact thumbnails and underlined category titles. **Photo-led** allocates more width to photos and uses a gold marker beside each category heading.
+- Use one guest menu design based on the supplied restaurant-menu references: a dark navy hero with a copper biryani photograph, gold accents, an ivory canvas, illustrated category links, compact dish thumbnails and underlined category titles. Do not show Classic/Photo-led links or a theme menu on mobile or desktop. Old theme query links and stored hosted theme values render this same design.
 - Allow approved brand color, logo, and imagery through theme tokens and assets. Keep content order and controls common. Test text contrast over photos with the actual assets. If no photo is available, use the text layout gracefully.
 - Keep staff sign-in and operations visually separate from the guest website. Photos help guests decide. Staff can identify dishes using text, price, and category.
-- Both themes keep the same live dishes, prices, and availability. Search by dish name and category, show a clear action for zero results, and keep category links usable at 320 px. Omit the image frame when there is no photo. Sample dish artwork appears only in sample mode. Guests browse the dine-in menu and place orders with their waiter.
+- Keep live dishes, prices, and availability synchronized across the local preview and hosted menu. Search by dish name and category, show a clear action for zero results, and keep category links usable at 320 px. Omit the image frame when there is no photo. Sample dish artwork appears only in sample mode. Guests browse the dine-in menu and place orders with their waiter.
 - Admins can upload, replace, or remove a dish photo. Accept a still JPEG, PNG, or WebP up to 4 MB and 16 megapixels. Store a resized WebP and display it next to the named dish. Keep the guest menu readable if a photo fails to load.
-- The hosted menu uses the outlet name as its heading and the outlet’s selected theme. Show the last successful update in India time under the heading. Theme switching stays in the local preview. If a menu is unpublished, direct guests to ask the restaurant. If the request fails, let guests retry.
+- The hosted menu uses the outlet name as its heading and the same single layout as the local preview. Show the last successful update in India time under the heading. If a menu is unpublished, direct guests to ask the restaurant. If the request fails, let guests retry.
 - In the admin catalog, show whether public publishing is off, waiting, or up to date. Keep the last successful publish time visible while changes wait. The staff connection indicator remains separate because local service can continue during an internet outage.
 
 ### Table QR cards
@@ -192,7 +192,7 @@ These screens follow the [service-mode scope](BUILD_PLAN.md#service-modes-includ
 
 ### Shareable menu images
 
-- Export the whole catalog in category order, even when the admin has searched for a dish. Use a cream background, brick headings, and aligned INR prices from the Classic theme. Include each dish name and a written sold-out label where applicable.
+- Export the whole catalog in category order, even when the admin has searched for a dish. Use a cream background, brick headings, and aligned INR prices consistent with the guest menu. Include each dish name and a written sold-out label where applicable.
 - Use a 1080 × 1350 portrait layout with a user-entered title, an India-time snapshot stamp, and page numbering. Keep a dish together and repeat its category when it continues on a new page. Use text-led pages for social sharing and the guest site for detailed descriptions and photos.
 - Show the page preview and an accessible text view before download. Let the admin save the current PNG or get the complete set in one ZIP. Generate the files on the outlet device using the existing catalog data.
 
@@ -203,7 +203,7 @@ These screens follow the [service-mode scope](BUILD_PLAN.md#service-modes-includ
 
 ### Guest phone sign-in
 
-- Keep browsing available throughout sign-in. Use a small inline guest-account area with the same colors and type as the selected theme.
+- Keep browsing available throughout sign-in. Use a small inline guest-account area with the same colors and type as the guest menu.
 - Ask for the Indian mobile number first, then show one field for the six-digit code with support for SMS autofill. Show only the last four digits in the confirmation and signed-in state. Let guests correct the number, request a new code, or close the form.
 - Place errors inside the account area, preserve the current step on a recoverable error, and give the guest a clear next action.
 

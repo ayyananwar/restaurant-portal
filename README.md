@@ -8,7 +8,7 @@ Restaurant Portal is a single-outlet restaurant service system in active develop
 | --- | --- |
 | Waiter, kitchen, and counter | Table ownership and transfers, preparation, order corrections, joins and splits, pay-first counter orders, tokens, refunds, and paper-order entry |
 | Admin | Service modes, staff accounts and tables, owner resolutions, menu catalog, photos and availability, activity reports, QR cards, menu images, coupons, and feedback |
-| Guest website | Classic and Photo-led menus, availability, phone sign-in, offer claims, and receipt-linked feedback |
+| Guest website | One responsive menu, availability, phone sign-in, offer claims, and receipt-linked feedback |
 | Distribution | Windows installer packaging and a separate hosted guest service |
 | Built-in billing · development | Non-GST receipts, GST invoices, bills of supply, saved-bill search, counter credit notes and native receipt/A4 printing |
 | Recovery · development | Manual encrypted export, offline unlinked-outlet restoration, preserved access/numbering boundaries and owner review before service resumes |
@@ -104,7 +104,7 @@ The local link works on the Windows computer while the server is running. If it 
 
 Set `$env:RESTAURANT_SAMPLE_ARTWORK = '1'` when running the sample to show reference thumbnails for the four demo dishes. Photos uploaded through **Menu catalog** take precedence.
 
-Open the [Classic guest menu](http://127.0.0.1:3100/guest-menu) or [Photo-led guest menu](http://127.0.0.1:3100/guest-menu?theme=photo-led) without signing in. Both read the local catalog. Sign in as admin and open **Menu catalog** to add, replace, or remove a dish photo.
+Open the [guest menu](http://127.0.0.1:3100/guest-menu) without signing in. It reads the local catalog and uses one responsive design with compact dish photos. The previous Classic/Photo-led switch has been removed; old theme query links still open this same menu. Legacy hosted theme metadata remains readable for existing outlets and does not change the layout. Sign in as admin and open **Menu catalog** to add, replace, or remove a dish photo.
 
 ## Windows installer kit
 
@@ -168,7 +168,7 @@ The hosted process serves the shared guest menu build and stores outlet menus an
 
 1. Run `npm.cmd ci` and `npm.cmd run build`.
 2. Set `HOSTED_DATABASE_URL` and `HOSTED_INSTALLATION_TOKEN` in the provisioning environment. Generate a separate random 32-byte installation secret for each outlet and encode it as lowercase hex.
-3. Run `npm.cmd run setup:hosted -- ranchi-cafe "Ranchi Café" photo-led`. Use `classic` for the text-led layout. Setup creates the hosted tables and provisions the outlet. Reusing a slug fails without replacing its data or credential.
+3. Run `npm.cmd run setup:hosted -- ranchi-cafe "Ranchi Café"`. Setup creates the hosted tables and provisions the outlet. Reusing a slug fails without replacing its data or credential. Older stored theme values remain compatible; all outlets render the single menu design.
 4. Run `npm.cmd run start:hosted` with `HOSTED_DATABASE_URL`. It listens on loopback port 3200 by default. Use `HOSTED_BIND`, `HOSTED_PORT`, `HOSTED_TLS_KEY`, and `HOSTED_TLS_CERT` for a direct TLS listener, or terminate HTTPS at a trusted proxy on the same machine. Use the externally reachable HTTPS origin in the restaurant publisher configuration.
 5. Configure the local publisher with the assigned slug and matching installation secret. Open `/r/ranchi-cafe` on the hosted service after the first acknowledgment. For a loopback preview with a published fixture, use [the local hosted menu](http://127.0.0.1:3200/r/ranchi-cafe).
 

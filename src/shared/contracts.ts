@@ -104,6 +104,7 @@ export interface MenuItem {
 }
 
 export type GuestMenuItem = Pick<MenuItem, 'id' | 'name' | 'pricePaise' | 'category' | 'available' | 'description' | 'availableAfter' | 'photoKey'>;
+// Legacy hosted metadata only. All outlets now use the same guest menu renderer.
 export type GuestMenuTheme = 'classic' | 'photo-led';
 export interface GuestMenu {
   items: GuestMenuItem[];

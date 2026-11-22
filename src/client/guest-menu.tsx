@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ConciergeBell, Coffee, CookingPot, Cupcake, Menu, Search, Soup, Utensils, X } from 'lucide-react';
+import { ConciergeBell, Coffee, CookingPot, Cupcake, Search, Soup, Utensils, X } from 'lucide-react';
 import { menuPhotoPath, type GuestMenu as GuestMenuData, type GuestMenuItem } from '../shared/contracts.js';
 import { api, RequestError } from './api.js';
 import { availabilityCaption, filterMenu, formatPublicationTime, groupMenu } from './menu-display.js';
@@ -20,13 +20,6 @@ function categoryIcon(name: string) {
   return Utensils;
 }
 
-function PreviewThemes({ photoLed }: { photoLed: boolean }) {
-  return <nav className="guest-themes" aria-label="Preview theme">
-    <a href="/guest-menu" aria-current={!photoLed ? 'page' : undefined}>Classic</a>
-    <a href="/guest-menu?theme=photo-led" aria-current={photoLed ? 'page' : undefined}>Photo-led</a>
-  </nav>;
-}
-
 function GuestMenu() {
   const [menu, setMenu] = useState<GuestMenuData | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
@@ -38,7 +31,6 @@ function GuestMenu() {
   const searchButton = useRef<HTMLButtonElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const items = menu?.items;
-  const photoLed = outlet ? menu?.theme === 'photo-led' : new URLSearchParams(window.location.search).get('theme') === 'photo-led';
   const hasEstimate = items?.some(item => !item.available && item.availableAfter !== null) ?? false;
 
   useEffect(() => {
@@ -77,23 +69,18 @@ function GuestMenu() {
     searchButton.current?.focus();
   }
 
-  return <div className={`guest-page ${photoLed ? 'guest-photo-led' : 'guest-classic'}`}>
+  return <div className="guest-page">
     <a className="guest-skip" href="#guest-content">Skip to menu</a>
     <header className="guest-header">
       <div className="guest-topbar">
         <div className="guest-width guest-topbar-inner">
           <p className="guest-brand"><ConciergeBell aria-hidden="true" /><span>{restaurant}</span></p>
           <div className="guest-header-actions">
-            {!outlet && <div className="guest-desktop-themes"><PreviewThemes photoLed={photoLed} /></div>}
             {items && items.length > 0 && <button type="button" className="guest-icon-button" aria-label={searchOpen ? 'Close search' : 'Search menu'}
               aria-expanded={searchOpen} aria-controls={searchOpen ? 'guest-search' : undefined}
               ref={searchButton} onClick={() => searchOpen ? closeSearch() : setSearchOpen(true)}>
               {searchOpen ? <X aria-hidden="true" /> : <Search aria-hidden="true" />}
             </button>}
-            {!outlet && <details className="guest-mobile-themes">
-              <summary className="guest-icon-button" aria-label="Preview themes"><Menu aria-hidden="true" /></summary>
-              <PreviewThemes photoLed={photoLed} />
-            </details>}
           </div>
         </div>
       </div>

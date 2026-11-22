@@ -1,5 +1,12 @@
 # Development verification
 
+## Single guest menu · 23 November 2026
+
+- Removed the Classic/Photo-led links, mobile theme dropdown, alternate layout branch, unused menu icon and variant CSS. Kept the former default layout with compact photos, underlined category headings and the existing navy/ivory palette. Search and category navigation remain available on phones and PCs.
+- Old `?theme=classic` and `?theme=photo-led` links now show the same menu. Existing hosted theme metadata remains readable for compatibility and does not select another layout. No outlet data or database schema changed. README, design rules and the build plan now describe one guest menu.
+- Type checking, production build and all 42 service/storage tests passed. The full staff/catalog/menu browser regression passed, including legacy links, search, category selection, image loading, touch targets, accessibility and overflow checks at 320/390/768/1280 px. All four hosted tests passed against PostgreSQL with verified TLS and Edge, including outlets carrying older theme metadata.
+- Reviewed the 390 px and 1280 px screenshots in ignored `data/single-menu-check`; neither shows a theme switch or mobile theme control. The design detector returned no findings. Manual physical testing remains deferred.
+
 ## Hosted recovery transaction · 23 November 2026 · unreleased
 
 Added a storage-only transaction in `src/hosted/recovery.ts`. The Windows restore refusal remains unchanged, and the operation is not exposed through an HTTP route. Local schema 19 and the frozen 0.4.0 Windows archive are unchanged.

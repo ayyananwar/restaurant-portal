@@ -559,40 +559,42 @@ try {
   await guestDish.getByRole('img', { name: 'Lemon rice' }).scrollIntoViewIfNeeded();
   assert.equal(await guestDish.getByRole('img', { name: 'Lemon rice' }).evaluate(img => img.decode().then(() => img.naturalWidth > 0)), true);
   assert.equal(await guest.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-  await guest.getByLabel('Preview themes').click();
-  await guest.getByRole('link', { name: 'Photo-led' }).click();
+  assert.equal(await guest.getByRole('navigation', { name: 'Preview theme' }).count(), 0);
+  assert.equal(await guest.getByLabel('Preview themes').count(), 0);
   await guestDish.getByText('With curry leaves', { exact: true }).waitFor();
   await guest.getByRole('link', { name: 'Lunch specials', exact: true }).click();
   assert.equal(await guest.getByRole('link', { name: 'Lunch specials', exact: true }).getAttribute('aria-current'), 'location');
   await guestDish.getByRole('img', { name: 'Lemon rice' }).scrollIntoViewIfNeeded();
   assert.equal(await guestDish.getByRole('img', { name: 'Lemon rice' }).evaluate(img => img.decode().then(() => img.naturalWidth > 0)), true);
   assert.equal(await guest.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-  let classicMenu;
-  for (const theme of ['classic', 'photo-led']) {
-    await guest.goto(`${origin}/guest-menu?theme=${theme}`);
+  const singleMenu = await guest.locator('.guest-category').allTextContents();
+  for (const query of ['?theme=classic', '?theme=photo-led']) {
+    await guest.goto(`${origin}/guest-menu${query}`);
     await guestDish.getByText('₹140.00', { exact: true }).waitFor();
-    const contents = await guest.locator('.guest-category').allTextContents();
-    if (theme === 'classic') classicMenu = contents;
-    else assert.deepEqual(contents, classicMenu, 'Both themes must show the same live menu');
-    const heroUrl = await guest.locator('.guest-hero').evaluate(hero => getComputedStyle(hero).backgroundImage.match(/url\("([^"]+)"\)/)?.[1]);
-    assert.ok(heroUrl, `Missing ${theme} hero`);
-    const hero = await guest.request.get(heroUrl);
-    assert.equal(hero.status(), 200);
-    assert.equal(hero.headers()['content-type'], 'image/webp');
-    for (const width of [320, 390, 768, 1280]) {
-      await guest.setViewportSize({ width, height: 844 });
-      const layout = await guest.locator('.guest-page').evaluate(page => ({
-        fits: document.documentElement.scrollWidth <= innerWidth,
-        targets: Array.from(page.querySelectorAll('.guest-icon-button, .guest-themes a, .guest-categories a'), control => control.getBoundingClientRect())
-          .filter(rect => rect.width > 0 && rect.height > 0)
-          .map(rect => ({ width: rect.width, height: rect.height }))
-      }));
-      assert.equal(layout.fits, true, `${theme} menu at ${width}px`);
-      assert.ok(layout.targets.every(target => target.width >= 44 && target.height >= 44), `${theme} touch targets at ${width}px`);
-      if (width === 320 || width === 1280) await checkAccessibility(guest, `${theme} menu at ${width}px`);
-      if (screenshots && (width === 390 || width === 1280)) {
-        await guest.screenshot({ path: join(screenshots, `guest-${theme}-${width}.png`) });
-      }
+    assert.deepEqual(await guest.locator('.guest-category').allTextContents(), singleMenu, 'Old theme links show the single menu');
+    assert.equal(await guest.locator('.guest-page').getAttribute('class'), 'guest-page');
+    assert.equal(await guest.getByRole('link', { name: /^(Classic|Photo-led)$/ }).count(), 0);
+  }
+  await guest.goto(`${origin}/guest-menu`);
+  await guestDish.getByText('₹140.00', { exact: true }).waitFor();
+  const heroUrl = await guest.locator('.guest-hero').evaluate(hero => getComputedStyle(hero).backgroundImage.match(/url\("([^"]+)"\)/)?.[1]);
+  assert.ok(heroUrl, 'Missing menu hero');
+  const hero = await guest.request.get(heroUrl);
+  assert.equal(hero.status(), 200);
+  assert.equal(hero.headers()['content-type'], 'image/webp');
+  for (const width of [320, 390, 768, 1280]) {
+    await guest.setViewportSize({ width, height: 844 });
+    const layout = await guest.locator('.guest-page').evaluate(page => ({
+      fits: document.documentElement.scrollWidth <= innerWidth,
+      targets: Array.from(page.querySelectorAll('.guest-icon-button, .guest-categories a'), control => control.getBoundingClientRect())
+        .filter(rect => rect.width > 0 && rect.height > 0)
+        .map(rect => ({ width: rect.width, height: rect.height }))
+    }));
+    assert.equal(layout.fits, true, `Menu at ${width}px`);
+    assert.ok(layout.targets.every(target => target.width >= 44 && target.height >= 44), `Menu touch targets at ${width}px`);
+    if (width === 320 || width === 1280) await checkAccessibility(guest, `Menu at ${width}px`);
+    if (screenshots && (width === 390 || width === 1280)) {
+      await guest.screenshot({ path: join(screenshots, `guest-menu-${width}.png`) });
     }
   }
 
@@ -744,7 +746,7 @@ try {
   await waiter.getByRole('heading', { name: 'Staff sign-in' }).waitFor();
   assert.deepEqual(externalRequests, []);
   assert.deepEqual(browserErrors, []);
-  console.log('Browser check passed: local operations, catalog and availability, photo upload, and both guest menu themes.');
+  console.log('Browser check passed: local operations, catalog and availability, photo upload, and the single responsive guest menu.');
 } finally {
   await browser?.close();
   await app.close();
