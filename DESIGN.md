@@ -125,6 +125,21 @@ Move keyboard focus to the new admin page heading when switching sections. Retur
 - Show **Unpaid** or **Paid** with the payment method. When a receipt is recorded, lock the check’s dish quantities and any split allocation. Kitchen status updates can continue.
 - The assigned waiter confirms **Mark table vacant** after guests leave. Enable release when every remaining dish is ready and every check is paid, or when all dishes were cancelled.
 
+### Counter service and mixed service
+
+These screens follow the [service-mode scope](BUILD_PLAN.md#service-modes-included-in-the-first-release) and its acceptance matrix.
+
+- Configure Table service, Counter service, or Both within the shared admin overview layout. Show affected open orders before a mode change and retain a route to resolve them.
+- Counter service opens the billing workspace with New order and clearly named pending-payment, preparation, ready, and history views. Mixed service gives cashiers a clear choice between Table checks and Counter orders.
+- Reuse the dish picker and review pane. Ask for Dine-in or Takeaway and keep optional customer and seating details compact. Show payment confirmation as the action that issues a token and sends dishes to the kitchen.
+- Keep item subtotal, coupon reduction, and official receipt amount labelled distinctly. Preserve the order and external receipt reference after a failed confirmation. Explain how to check a payment whose result is uncertain.
+- Display token and service type prominently on the counter and kitchen tickets. Keep table orders identifiable by table number. Show preparation and payment states in text and show paid corrections and unresolved refunds explicitly.
+- Enable Collected once remaining dishes are ready. Confirm the token before handover and keep reprinting available independently of order submission.
+- Partial and full paid cancellations retain the original receipt and show their correction history. Collect the external refund amount and reference explicitly. Keep full kitchen cancellations visible until kitchen acknowledgment.
+- Owner setup includes staff creation, access controls, generated credential handoff, and table labels. Keep passwords out of saved reports and show newly generated credentials only in the current action.
+- Before a receipt or split is recorded, billing can reduce or cancel a ready table dish or correct its note, with a required audit reason. Owners can resolve an unpaid table after reviewing its current balance and recording a reason. Show the kitchen a separate stop-preparation notice.
+- Use the same phone and PC interaction rules as the existing staff workspace. Verify empty queues, long names, missing optional data, keyboard focus, connection loss, retries, and simultaneous updates.
+
 ### Paper-order entry
 
 - Focus the setup heading on open. If the selected table or waiter becomes unavailable, clear it from the visible selection and explain what to choose next.

@@ -2,6 +2,110 @@
 
 Use this file as the scope and release checklist. A phase stays open until its acceptance checks pass. Record each release candidate's version, device matrix, test run, findings, and retests in the verification log. Add a regression check when fixing behavior that could break again.
 
+## Service modes included in the first release
+
+The first single-outlet package includes **Table service**, **Counter service**, and **Both** as outlet settings. Counter service uses the owner's confirmed **pay first** flow. Version 0.2.0 implements these modes. Local verification and outstanding physical checks are recorded in VERIFICATION.md.
+
+| Mode | Staff workflow | Required setup |
+| --- | --- | --- |
+| Table service | Waiter opens a table, sends dishes to the kitchen, and the counter records the final receipt and payment. The waiter releases the table after service. | Tables and enabled waiter accounts, plus kitchen and billing access. |
+| Counter service | Cashier selects dishes, reviews the order, records successful payment, issues a token, and sends paid dishes to the kitchen. Staff hand over the ready order. | Billing and kitchen access. Tables and waiter accounts are optional. |
+| Both | Cashier can create counter orders while waiters continue table service. The kitchen sees clearly labelled table and token orders together. | Configuration for both workflows, with permissions appropriate to each staff account. |
+
+### Scope and working defaults
+
+- Pay-first counter service is approved for this release. The cashier records payment using the restaurant's existing payment and billing arrangements. The kitchen receives the counter order after its payment record is committed.
+- The owner approved counter approval or blocked changes after preparation starts, partial and full paid-counter cancellations/refunds, and keeping unpaid table checks locked until payment or an owner resolution.
+- Working defaults for implementation are optional customer name, **Dine-in** or **Takeaway**, one payment record per counter order, a unique token within each outlet business date, and **Collected** as the handover action. These choices need review with the first outlet before pilot sign-off.
+- A counter dine-in order may carry an optional seating label. Its lifecycle is driven by the token and collection state. Table service continues to use ownership and table release.
+- The same catalog, prices, availability, notes, coupons, dish picker, and kitchen preparation meanings apply to all three modes. Reuse the existing components and services where their behavior fits.
+- The current release uses manual payment confirmation. Payment-provider verification, online checkout, automated refunds, delivery, multi-outlet operations, and the farmer marketplace stay in the later roadmap.
+
+### Outlet setup and mode changes
+
+1. The owner or authorized installation administrator selects the service mode during setup. Save it locally and expose it through the authenticated service configuration.
+2. Counter-only setup can finish with zero tables and zero waiter accounts. Table and mixed setup validate the tables and waiter access needed to operate.
+3. Initialize existing installations to Table service through a compatible migration. Preserve staff, table IDs, orders, receipts, reports, and publication state.
+4. A mode change controls which new orders staff may start. Retain access to active orders from the previous mode until they are completed or resolved. Show the count of affected open orders before confirming the change.
+5. Record mode changes with the actor, previous value, next value, and timestamp. Apply permissions and mode checks on the server.
+
+### Counter order lifecycle
+
+1. **New order.** Billing staff choose Counter order, select Dine-in or Takeaway, and optionally enter a customer name and seating label. Open the existing search and category dish picker directly.
+2. **Review.** Show quantities, notes, current availability, item subtotal, coupon reduction, and the amount to record. Validate the catalog again on submission and keep accepted prices as order snapshots.
+3. **Awaiting payment.** Persist an order identity and revision before payment confirmation. Keep unpaid orders in the counter's pending list so staff can reopen them after refresh or a service restart. Customers receive their kitchen token after payment is confirmed.
+4. **Record payment.** The cashier collects payment through the outlet's existing arrangements and records the method, external receipt reference, and official receipt amount. Keep the portal subtotal and official receipt amount labelled separately, following the existing billing handoff.
+5. **Commit and issue token.** In one transaction, validate the current order, save its payment record, consume any eligible coupon, allocate the token, and make its dishes eligible for the kitchen queue. Return the same result for a duplicate confirmation request.
+6. **Prepare.** The kitchen sees the token, Dine-in or Takeaway, dishes, and notes. Staff update each dish to In preparation and Ready using existing controls.
+7. **Ready.** The counter marks the order ready for collection when every remaining dish is ready. Show unpaid, paid, preparing, ready, collected, cancelled, and refund-needed states with text.
+8. **Collect.** Authorized staff confirm Collected. Keep the token and receipt in history and remove the order from the active pickup list. Repeated collection requests return the already-saved result.
+
+### Payment, corrections, and exception handling
+
+- An unpaid, failed, or uncertain payment cannot make a counter order eligible for preparation. Preserve its draft and reference so the cashier can review the actual payment outcome before confirming.
+- Disable repeated confirmation while a request is pending. Persist idempotency keys with their original payloads and results, so a timeout, retry, concurrent cashier, or restart cannot generate a second token, payment record, coupon redemption, or kitchen submission.
+- Recheck prices, availability, coupons, receipt rules, and order revision before payment confirmation. Explain conflicts and preserve the order for correction. Payment confirmation must identify an immutable reviewed order version.
+- If money was received externally but the local save failed, show a reconciliation action using the same order and receipt reference. The cashier verifies the external payment before recording it. Treat a partial record as an error requiring resolution.
+- Permit unpaid cancellation with a confirmation naming the order. Record a reason for paid cancellations or corrections and the actor making them. Paid corrections preserve the original order and receipt history.
+- Additional paid items use a new counter order and token in the first version. A post-payment reduction or cancellation uses a linked correction record, explicit refund-needed state, and a manually recorded external refund outcome. Record the cancelled dish and quantity, reason, refund amount from the official receipt, actor, time, and external refund reference. Bound cumulative adjustments by the original paid receipt.
+- Keep preparation cancellation and payment adjustment states separately visible. A cancelled paid order remains unresolved until its financial adjustment is recorded or an authorized reviewer records the resolution.
+- Concurrent staff updates use revisions. Reject stale changes, refresh the affected order, and give the cashier a clear retry or review path.
+- During an internet outage, local ordering, payment recording, token assignment, preparation, and collection continue over staff Wi-Fi. If staff Wi-Fi fails, use paper and reconcile from the main counter.
+- Extend paper entry for counter orders with an external receipt reference, payment outcome, original paper token if present, and whether the food still needs preparation. An already-served entry records history without adding kitchen work. Clearly distinguish the original paper reference from the portal token.
+
+### Permissions and customer privacy
+
+| Account | Service-mode capabilities |
+| --- | --- |
+| Owner/admin | Configure service mode, inspect activity, and review corrections and reconciliations. Explicit financial permissions are required for adjustments. |
+| Billing | Create counter orders, record payment, issue or reprint tokens, reconcile payment records, and confirm collection. |
+| Kitchen | View paid counter dishes and table-service dishes, update preparation, and view cancellation instructions. |
+| Waiter | Continue table ordering, ownership, and handover responsibilities for table service. |
+| Guest | Browse the published menu and use the existing account, offer, and feedback features. |
+
+Collect only the customer details needed for handover. A phone number is optional when a guest asks to apply an account-linked offer. Verify the existing claim entitlement rather than treating a typed phone number as proof. Keep customer identifiers and payment details off public token displays and guest menu snapshots.
+
+### Interface and reporting
+
+- Keep the admin overview shell and add the outlet service setting within it. Use shared tokens and existing controls across all modes.
+- In Counter service, the billing landing screen presents New order, Awaiting payment, Preparing, Ready, and History. In Both, provide clearly named Table checks and Counter orders destinations.
+- Show the token prominently on counter orders, alongside service type, time, preparation state, and payment state. Kitchen tickets identify Table or Counter and retain per-dish notes.
+- On phones, use the existing dish-picker review flow. On PCs, display the catalog and draft together. Preserve the same draft when resizing and protect it when navigating away.
+- A token print action is available after successful confirmation and can be retried without submitting the order again. Print the token, service type, relevant order summary, and restaurant identity. Retain the existing external billing product as the issuer of the official receipt.
+- Use an order ID and outlet date alongside the human-readable token in history so reused daily numbers remain distinguishable. Allocate sequence numbers in the database and test the date boundary in India time.
+- Show counter-order counts and amounts by cashier and service type. Label portal item amounts, official receipt amounts, cancellations, and recorded refunds distinctly. Credit waiter reports only for actual waiter entries.
+- The initial counter history view shows seven days of closed orders and retains unresolved work. The period activity report reads the retained database history. Review longer item-level history access with the pilot outlet.
+- Determine feedback-code eligibility and coupon redemption from the paid counter order identity. Check that the existing publication and claim reconciliation paths work without a table ID.
+
+### Data and synchronization
+
+- Model service mode, order origin, fulfillment type, order revision, cashier attribution, optional seating/customer details, token date and number, payment records, corrections, and collection timestamps explicitly.
+- Review table and waiter assumptions in storage, API contracts, receipt handoff, coupon verification, kitchen queries, feedback codes, reporting, and browser state before changing the order representation.
+- Make the order identity usable for table and counter orders. Retain backwards compatibility for old stored table orders and the clients' existing entry points through a migration and shared validation.
+- Synchronize only the guest data required by the website, offers, and private feedback. Keep operational orders, token queues, staff accounts, and financial history in local storage under the current architecture.
+
+### Service-mode acceptance matrix
+
+| Scenario | Required result |
+| --- | --- |
+| Existing outlet upgrade | Existing data opens intact in Table service and the existing waiter-to-kitchen-to-counter workflow passes. |
+| Counter-only installation | Can operate without tables or waiter accounts. Unavailable table actions have clear mode-appropriate navigation. |
+| Mixed outlet | Table and counter orders coexist. Their receipts, tokens, attribution, and kitchen instructions stay distinct. |
+| Pending or failed payment | Order is recoverable at the counter and absent from the preparation queue. |
+| Successful payment | One payment record, one token, one coupon redemption where applicable, and one eligible kitchen submission. |
+| Lost confirmation response | Retrying returns the original confirmed token and payment result. |
+| Restart during confirmation | The saved order is either pending or fully confirmed. Staff can resolve external payment uncertainty from the original reference. |
+| Two cashiers confirm together | One accepted result with the other client shown the saved state or a clear conflict. |
+| Price, stock, or coupon changes | The cashier reviews the conflict before confirming the final order version. |
+| Kitchen prepares part of an order | Remaining dishes stay pending. Collection requires all remaining dishes ready. |
+| Paid cancellation or correction | Kitchen and counter see the correction, original records remain, and refund-needed work is visible until resolved. |
+| Duplicate collection or reprint | Collection stays singular and reprinting creates no new order or token. |
+| Mode changes with open orders | Existing orders remain accessible and new-order options follow the new mode. |
+| Date boundary and restart | Tokens remain unique for each outlet date and continue correctly after restart. |
+| Paper recovery | Live entries reach the kitchen once. Already-served entries enter history with payment and paper references. |
+| Public data boundary | Public menus and token slips expose only their intended data. Unauthorized financial and configuration requests fail. |
+| Device and layout coverage | Keyboard and touch work at 320, 390, 768, and 1280 px. Long names, empty queues, errors, and reduced motion are checked. |
+
 ## Codebase hygiene for every change
 
 Use this checklist before starting a change and again before marking it complete.
@@ -70,14 +174,31 @@ The selected skills were installed from reviewed revisions of [Better Icons](htt
 
 - [x] Add moves to an available table and transfers to an enabled waiter. Keep the existing order and dish status, record who changed the assignment, and reject stale or unauthorized changes.
 - [x] Implement and verify sent-order changes locally. The assigned waiter can add dishes to the same check and change quantities, notes, or cancel dishes that are queued. The default policy requires counter approval once preparation starts. Changes and decisions are recorded, and the check total reflects approved changes. See [order change verification](VERIFICATION.md#sent-order-changes).
-- [ ] Add outlet-level configuration for changes after preparation starts. Confirm the allowed policies before exposing them to admins. Handle corrections to ready dishes in the billing and correction workflow.
+- [x] Add owner configuration for counter approval or blocked preparing-dish changes. Let billing audit corrections to ready table dishes before receipts or splits lock the check. Preserve paid receipt history and use the external billing product for official adjustments.
 - [x] Add counter-led table joins and item-quantity splits for two to eight checks. Preserve kitchen states, reconcile the original total, and audit saves and reopens. Verify that stale orders and duplicate retries cannot change the result. See [verification](VERIFICATION.md#table-joins-and-split-checks).
 - [x] Implement and verify local counter handoff with external receipt references and payment outcomes for whole and split checks. The assigned waiter can release a paid table once the kitchen finishes, or release an order with all dishes cancelled. See [receipt handoff verification](VERIFICATION.md#receipt-handoff-and-table-release).
 - [x] Add counter paper-order entry for live and already-served orders. Credit the selected waiter without reassigning an occupied table. Queue only live entries for the kitchen and keep submission retries duplicate-safe. See [paper-order verification](VERIFICATION.md#paper-order-entry).
 - [x] Report waiter activity by day, week, and month in the admin view. Count distinct orders per waiter and show entry counts separately. Preserve attribution through moves, transfers, and joins, and count paper entries for the credited waiter on the recording date. See [waiter activity verification](VERIFICATION.md#waiter-activity).
-- [ ] Confirm unpaid table release before implementing it. Test no mixing of successive parties, balance reconciliation, rounding, duplicate receipt references, and corrections.
+- [x] Keep unpaid tables locked until payment or owner resolution. Record the reviewed balance and reason, reject stale resolutions, preserve the next party’s order identity, and retain a kitchen acknowledgment notice. Existing receipt checks cover amount validation and duplicate references.
 - [ ] Verify printing, manual sharing, and offline receipt capability with the selected outlet's actual billing product. The external product issues the official bill.
 - [x] Review move, transfer, split, and paper-entry screens for safe confirmation, clear totals, and recoverable errors. See [counter workflow UI review](VERIFICATION.md#counter-workflow-ui-review).
+
+## Phase 2A · Counter service and mixed service implementation
+
+Complete these items before the release-candidate gate. This phase extends the table-service implementation in Phase 2.
+
+- [x] Trace existing table and waiter dependencies and approve the migration and shared order contracts. Define payment reconciliation and correction records before implementing paid mutations.
+- [x] Add service-mode storage, migration, owner configuration, and server permission checks. Verify existing outlets and mode changes with active orders.
+- [x] Provision counter-only outlets without required tables or waiter accounts. Verify setup for all three modes with sample data.
+- [x] Adapt the existing dish picker and draft for counter orders. Persist pending payment orders and preserve review state across recoverable failures.
+- [x] Implement transactional pay-first confirmation, official receipt handoff, cashier attribution, coupon redemption, and restart-safe idempotency.
+- [x] Add token allocation, paid kitchen routing, readiness, collection, history, and duplicate-safe reprinting.
+- [x] Add mixed-service counter and kitchen navigation. Verify both workflows operate concurrently with existing role restrictions.
+- [x] Implement unpaid cancellations, paid corrections, manual refund recording, and reconciliation with audit history and explicit unresolved states.
+- [x] Extend paper recovery, reporting, coupons, and feedback for counter orders. Verify each path uses the shared order identity.
+- [x] Extend existing service, storage, startup, and browser suites to cover every service-mode acceptance scenario. Reuse fixtures and keep new tests tied to behavior.
+- [x] Review the rendered UI against DESIGN.md and the supplied references. Record screenshots, accessibility checks, mobile behavior, and failure recovery in VERIFICATION.md.
+- [ ] Complete a physical counter-service and mixed-service walkthrough with the outlet's actual payment, receipt, printer, and staff-network setup.
 
 ## Phase 3 · Public website and synchronization
 
@@ -108,8 +229,9 @@ The selected skills were installed from reviewed revisions of [Better Icons](htt
 - [x] Build a versioned Windows x64 installer kit with a bundled runtime and boot-task configuration. Verify clean installation, process restart, update, damaged-update rejection, and compatible rollback with sample data. See [verification](VERIFICATION.md#windows-installer-kit).
 - [ ] Run the [Windows boot check](README.md#windows-installer-kit) on a clean counter PC or VM. Verify actual task registration, permissions, and startup after reboot. Test disk exhaustion and interruptions during database writes.
 - [ ] Run a full simulated dinner with real phones and the outlet's billing workflow. Test simultaneous requests, weak Wi-Fi, a WAN outage, and reconnection. Record the device and browser matrix and observed performance.
-- [ ] Run all automated tests, dependency and secret scans, and the staged security checks below. Fix confirmed findings and retest them. Require zero open known in-scope defects and zero unresolved confirmed security findings.
-- [ ] Document deployment, manual receipt handoff, paper fallback, incident ownership, and the first release's lack of backup and restore. Local drive failure can lose historical records.
+- [x] Run local service/storage, startup/HTTPS, Edge, hosted PostgreSQL, and Windows installer regressions for 0.2.0. Run the dependency audit and targeted source credential-pattern scan. Record scope and results in VERIFICATION.md.
+- [ ] Complete staged security checks against the configured deployment. Fix confirmed findings and retest them. Require zero open known in-scope defects and zero unresolved confirmed security findings before release.
+- [x] Document installation, account provisioning, manual receipt and refund handoff, paper fallback, incident responsibilities, and the absence of supported automated backup and restore in README.md. Confirm outlet-specific contacts and the production recovery decision at handover.
 - [ ] After software development and local verification, provision internet staging with a publicly trusted certificate. Run the [staging checks](README.md#verify-internet-staging), including a real restaurant-network interruption and catch-up after reconnection.
 - [ ] Verify SMS delivery and phone sign-in with the configured provider on Indian mobile numbers, including a delayed message and one failed or expired code.
 - [ ] Scan printed QR cards from real phones on a guest network and verify each card opens the correct hosted outlet menu.

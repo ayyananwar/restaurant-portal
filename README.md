@@ -1,17 +1,63 @@
 # Restaurant portal
 
-Restaurant Portal is a single-outlet dine-in system in active development. The Windows staff app handles orders, kitchen updates, counter checks, menu management, and owner reporting. A separate guest website serves the published menu, offers, phone sign-in, and private feedback. The restaurant's billing software issues the official receipt.
+Restaurant Portal is a single-outlet restaurant service system in active development. The Windows staff app handles table service, pay-first counter orders, kitchen updates, receipts, menu management, and owner reporting. A separate guest website serves the published menu, offers, phone sign-in, and private feedback. The restaurant's billing software issues the official receipt.
 
 ## Project status
 
 | Area | Available in the development build |
 | --- | --- |
-| Waiter, kitchen, and counter | Table ownership and transfers, per-dish preparation, order changes, table joins, split checks, and paper-order entry |
-| Admin | Menu catalog, dish photos and availability, waiter activity, QR cards, shareable menu images, coupons, and private feedback inbox |
+| Waiter, kitchen, and counter | Table ownership and transfers, preparation, order corrections, joins and splits, pay-first counter orders, tokens, refunds, and paper-order entry |
+| Admin | Service modes, staff accounts and tables, owner resolutions, menu catalog, photos and availability, activity reports, QR cards, menu images, coupons, and feedback |
 | Guest website | Classic and Photo-led menus, availability, phone sign-in, offer claims, and receipt-linked feedback |
 | Distribution | Windows installer packaging and a separate hosted guest service |
 
 The code has been tested with local browser and service fixtures. The outlet pilot still needs real staff phones and Wi-Fi, the selected billing product, a clean Windows boot test, production staging, and real SMS delivery.
+
+Version 0.2.0 adds Table service, pay-first Counter service, and Both as outlet modes. The [service-mode plan](BUILD_PLAN.md#service-modes-included-in-the-first-release) tracks their acceptance checks and remaining outlet verification.
+
+## Set up service modes
+
+For a separate counter-only sample, set a new database path before setup.
+
+```powershell
+$env:RESTAURANT_DB = 'data/counter-demo.sqlite'
+npm.cmd run setup -- --demo --mode=counter
+npm.cmd start
+```
+
+The counter sample creates owner, billing, and kitchen accounts with generated passwords. Use `--mode=both` for a mixed-service sample with tables and waiters. Existing installations migrate to Table service.
+
+To provision an empty real outlet, use a new database path and `npm.cmd run setup -- --outlet --mode=counter`, `--mode=table`, or `--mode=both`. Save the generated credentials privately. The owner can add staff, reset another account's password, enable or disable access, and add or rename tables under **Outlet overview → Manage staff and tables**. Add dishes in **Menu catalog**. Table-service outlets need tables and enabled waiter accounts before service.
+
+Owners change the service mode under **Outlet overview → Change service mode**. Existing open orders remain available for completion. Owners can require counter approval for changes after preparation starts or block those changes.
+
+## Counter orders
+
+1. Sign in as billing and open **Counter orders → New counter order**. Choose Dine-in or Takeaway, enter optional handover details, and select dishes.
+2. Review the draft and choose **Save for payment**. The unpaid order remains at the counter and survives a server restart.
+3. Collect payment through the restaurant's payment and billing arrangements. Enter the external receipt reference, official amount, and payment method, then choose **Record payment and issue token**. The portal records the outcome supplied by staff.
+4. The kitchen receives the paid order with its token and dish notes. Staff mark dishes ready. Billing confirms collection when all remaining dishes are ready. Reprinting a token keeps the same order and token.
+5. For a paid correction, choose **Cancel some items**, enter the quantity, refund amount from the official receipt, and reason. Full cancellation records the remaining refundable amount. Record the refund through the external payment system, then save its reference with **Record external refund**.
+
+The original receipt remains in the history. Corrections cannot exceed its refundable amount. Full kitchen cancellations remain visible until kitchen staff acknowledge them. **History** displays the last seven days of closed counter orders, while unresolved work remains visible. The owner activity report includes counter counts and amounts by cashier and service type for the selected period.
+
+For paper recovery, choose the paper source and original reference when starting the counter order. Live paper entries reach the kitchen after payment is recorded. Already-served entries are recorded as ready and stay out of the preparation queue.
+
+## Unpaid table resolutions
+
+Table orders stay locked until paid and ready or until an owner records a resolution. The owner opens **Review unpaid resolution** on the table, reviews the balance against the billing software, enters a reason, and confirms **Record resolution and free table**. A changed balance requires a new review. The resolution remains in owner history and the kitchen receives an instruction to stop remaining preparation. This records the owner's resolution separately from payment.
+
+## Operating and incident checklist
+
+- Before opening, confirm the Windows service, staff Wi-Fi, sign-in, menu availability, printer, and external billing/payment system work. Assign an owner contact for financial resolutions and a support contact for the Windows service and hosted menu. Record those contacts privately in the outlet handover.
+- During an internet outage, keep staff on the local Wi-Fi. Local service continues and public menu changes wait to synchronize. Inspect the publication status after reconnection.
+- During a staff-network outage, use paper and the main counter. Record original paper references when reconciling. Review saved orders before entering a payment again.
+- If a payment save times out, check the pending or paid order and the external receipt before retrying. Use the original pending order. Resolve stale changes from the refreshed state.
+- If the local service fails, inspect its service logs, available disk space, and Windows task status. Stop service before attempting database repair. Preserve the original database and its associated SQLite files for authorized investigation.
+- Before an update, follow the Windows installer procedure below and retain the previous compatible installer. Verify sign-in, an order, and a public menu update after the update.
+- The application currently has no supported automated backup-and-restore workflow. The local database contains operational history. Loss of its drive can lose that history. A production retention and recovery decision remains a release requirement.
+
+Deploy the hosted service and provision production credentials after local verification and the required outlet checks. The build plan tracks trusted HTTPS, guest-network isolation, physical printing, real SMS delivery, and staging verification.
 
 ## Repository guide
 
@@ -65,6 +111,18 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $sampleRoot '
 Open [the sample staff portal](http://127.0.0.1:3100) or [port 3101](http://127.0.0.1:3101) if changed. Sign in as `admin`, `waiter`, `kitchen`, or `billing` using the matching entry in `data/demo-accounts.txt` under the sample installation. The launcher stays running while the app is open. Its startup logs are `data/service.log` and `data/service-errors.log`.
 
 For automatic startup at the outlet, run `Install.ps1 -RegisterStartup` from administrator PowerShell. The default directory is `%ProgramData%\RestaurantPortal`. The task starts the app at boot as Windows Local Service. The database is in `data/outlet.sqlite`, separate from the versioned program files. Before the pilot, provision the outlet database and actual staff accounts. `-Demo` is for sample data. Set the staff network and publication values in `settings.json` as strings. Use absolute certificate paths readable by Local Service and configure staff-only firewall access separately. [Windows startup triggers](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasktrigger)
+
+For a newly installed real outlet, stop the service and provision its accounts with the bundled runtime. Use the actual installation root if it differs.
+
+```powershell
+$outletRoot = Join-Path $env:ProgramData 'RestaurantPortal'
+$activeRelease = Get-Content (Join-Path $outletRoot 'active.json') -Raw | ConvertFrom-Json
+$outletApp = Join-Path $outletRoot "versions/$($activeRelease.active)/app"
+$env:RESTAURANT_DB = Join-Path $outletRoot 'data/outlet.sqlite'
+& (Join-Path $outletApp 'runtime/node.exe') (Join-Path $outletApp 'dist/server/setup.js') --outlet --mode=both
+```
+
+Save the generated accounts privately, configure the network and hosted settings, and restart the service. Setup refuses an outlet that already has staff. Use owner setup in the portal for subsequent staff or table changes.
 
 Before updating, finish service, disable and stop the `RestaurantPortal` task, and verify the outlet process has stopped. Run `Install.ps1 -RegisterStartup` from the new verified kit. It checks the release against a temporary SQLite copy before switching versions, then starts the task. For a compatible rollback, stop the task the same way and run `Install.ps1 -RegisterStartup -Rollback`. Rollback refuses a release that cannot read the current database. Keep the live database intact while investigating an incompatible rollback.
 
@@ -172,7 +230,7 @@ The browser test uses an installed Microsoft Edge by default. Set `RESTAURANT_TE
 
 The default endpoint is for the counter computer only. For a test with phones, provision an HTTPS certificate and private key for a stable hostname that resolves over the outlet network and is trusted by the phones. Keep the private key and SQLite files readable only by the Windows service account and authorized administrators. Permit the service port only from the staff subnet, then verify guest Wi-Fi cannot reach it.
 
-Set `RESTAURANT_BIND` to the counter's staff-network address, `RESTAURANT_PORT` to the listener port, and `RESTAURANT_ORIGIN` to its exact HTTPS origin. Set `RESTAURANT_TLS_KEY` and `RESTAURANT_TLS_CERT` to PEM file paths. The service requires TLS for a network listener and checks the request host against the configured origin. Automatic Windows startup, production account provisioning, and real-device sign-off are tracked in the build plan.
+Set `RESTAURANT_BIND` to the counter's staff-network address, `RESTAURANT_PORT` to the listener port, and `RESTAURANT_ORIGIN` to its exact HTTPS origin. Set `RESTAURANT_TLS_KEY` and `RESTAURANT_TLS_CERT` to PEM file paths. The service requires TLS for a network listener and checks the request host against the configured origin. Use the provisioning procedure above for real accounts. Actual Windows boot registration and real-device sign-off remain in the build plan.
 
 ### Offline lab walkthrough
 

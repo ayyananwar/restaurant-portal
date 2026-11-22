@@ -18,6 +18,9 @@ import { MenuCatalog } from './menu-catalog.js';
 import { TableQrCards } from './table-qr-cards.js';
 import { CouponManager } from './coupon-manager.js';
 import { PrivateFeedback } from './private-feedback.js';
+import { CounterOrders } from './counter-orders.js';
+import { OutletSettings } from './outlet-settings.js';
+import { TableResolution } from './table-resolution.js';
 import { ArrowRight, BookOpen, ChefHat, ClipboardList, ConciergeBell, Grid2X2, House, LockKeyhole, LogOut, MessageSquareText, Plus, QrCode, Search, Ticket, UserRound, UsersRound, Eye, EyeOff, Check, CirclePlay } from 'lucide-react';
 import emptyTable from './art/empty-table.webp';
 import { DishPhoto } from './dish-photo.js';
@@ -108,6 +111,7 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
   const [listView, setListView] = useState(false);
   const [counterTab, setCounterTab] = useState<'open' | 'paid'>('open');
   const [counterTable, setCounterTable] = useState<number>();
+  const [billingView, setBillingView] = useState<'table' | 'counter'>(initial.settings.mode === 'counter' ? 'counter' : 'table');
   const version = useRef(0);
   const onSignOut = useRef(onSignedOut);
   onSignOut.current = onSignedOut;
@@ -115,6 +119,11 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
   useEffect(() => {
     if (workspaceView || tableId !== null || paperEntry === 'setup') window.scrollTo(0, 0);
   }, [workspaceView, tableId, paperEntry]);
+
+  useEffect(() => {
+    if (workspaceLocked || tableId !== null || paperEntry) return;
+    if (service.settings.mode === 'counter' && !service.tables.some(table => table.orderId !== null)) setBillingView('counter');
+  }, [service.settings.mode, service.tables, workspaceLocked, tableId, paperEntry]);
 
   useEffect(() => {
     if (!workspaceLocked) return;
@@ -185,6 +194,7 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
   const currentPage = adminPages.find(page => page.id === workspaceView);
   const title = currentTable && !paper ? (currentTable.orderId ? 'Order details' : 'Take order')
     : workspaceView === 'menu' && staff.role === 'kitchen' ? 'Dish availability'
+    : staff.role === 'billing' && billingView === 'counter' ? 'Counter orders'
     : isAdmin ? currentPage?.label ?? roleLabels.admin : roleLabels[staff.role];
   function returnToOverview() {
     setWorkspaceView(null);
@@ -204,6 +214,10 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
   const checkTotal = (table: ServiceState['tables'][number]) => table.lines.reduce((sum, line) => line.status === 'cancelled' ? sum : sum + line.pricePaise * line.quantity, 0);
   const selectedCheck = counterChecks.find(table => table.id === counterTable) ?? counterChecks[0];
   const billingDashboard = staff.role === 'billing' && !paperEntry && !currentTable;
+  const showCounter = staff.role === 'billing' && billingView === 'counter' && !paperEntry && !currentTable;
+  const counterAccessible = service.settings.mode !== 'table' || service.counterOrders.some(order =>
+    !['collected','cancelled'].includes(order.status) || (order.refund && !order.refund.reference));
+  const tableAccessible = service.settings.mode !== 'counter' || occupied > 0;
   return <div className={`staff-shell ${isAdmin ? 'staff-overview' : 'staff-sidebar-shell'}`} data-role={staff.role}>
     {isAdmin ? <div className="overview-banner" aria-hidden="true" /> :
       <aside className="staff-sidebar">
@@ -216,7 +230,7 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
             disabled={!connected} onClick={() => setWorkspaceView('menu')}><ConciergeBell aria-hidden="true" />Dish availability</button>}
         </nav>
       </aside>}
-    <main className={`workspace${billingDashboard ? ' counter-workspace' : ''}`}>
+    <main className={`workspace${billingDashboard && !showCounter ? ' counter-workspace' : ''}`}>
     <header className="topbar">
       <div>
         <p className="eyebrow">Restaurant portal</p>
@@ -255,6 +269,12 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
       {workspaceLocked && <p className="note">Save or cancel this edit to switch sections.</p>}
     </nav>}
     {error && <p role="alert" className="error">{error}</p>}
+    {staff.role === 'billing' && !paperEntry && !currentTable && <div className="actions counter-actions" aria-label="Service workspaces" role="group">
+      {(tableAccessible || billingView === 'table') && <Button variant={billingView === 'table' ? 'default' : 'outline'} aria-pressed={billingView === 'table'}
+        disabled={workspaceLocked} onClick={() => setBillingView('table')}>Table checks</Button>}
+      {(counterAccessible || billingView === 'counter') && <Button variant={billingView === 'counter' ? 'default' : 'outline'} aria-pressed={billingView === 'counter'}
+        disabled={workspaceLocked} onClick={() => setBillingView('counter')}>Counter orders</Button>}
+    </div>}
     {workspaceView === 'activity' ? <WaiterActivity onClose={returnToOverview} />
       : workspaceView === 'feedback' ? <PrivateFeedback onClose={returnToOverview} />
       : workspaceView === 'coupons' ? <CouponManager connected={connected} onClose={returnToOverview} onEditChange={setWorkspaceLocked} />
@@ -262,6 +282,7 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
       : workspaceView === 'menu' ? <MenuCatalog menu={menu} canEdit={isAdmin} connected={connected} onRefresh={refresh}
         publication={service.publication} samplePhotos={samplePhotos} onClose={returnToOverview}
         onEditChange={isAdmin ? setWorkspaceLocked : undefined} />
+      : showCounter ? <CounterOrders service={service} connected={connected} onRefresh={refresh} onEditChange={setWorkspaceLocked} />
       : paperEntry === 'setup' ? <PaperOrderSetup tables={tables} waiters={waiters} connected={connected}
       onStart={(id, details) => { setPaperEntry(details); setTableId(id); }}
       onClose={() => {
@@ -275,10 +296,24 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
         setPaperEntry(null);
         window.requestAnimationFrame(() => document.getElementById(paper ? 'paper-order-trigger' : `take-order-${currentTable.id}`)?.focus());
       }} onRefresh={refresh} /> : <>
+    {isAdmin && <OutletSettings service={service} connected={connected} onRefresh={refresh} />}
+    {isAdmin && !!service.resolutions?.length && <details className="panel">
+      <summary>Owner resolution history · latest 100</summary>
+      <ul className="split-summary">{service.resolutions.map(entry=><li key={entry.orderId}>
+        <strong>{entry.tableLabel} · Order {entry.orderId}</strong><p>{formatPaise(entry.amountPaise)} · {entry.reason}</p><p className="note">Recorded by {entry.owner}</p>
+      </li>)}</ul>
+    </details>}
+    {staff.role==='kitchen'&&service.tableCancellations?.map(notice=><section key={notice.orderId} className="panel">
+      <h2>{notice.tableLabel} · Order {notice.orderId} ended</h2>
+      <p className="error" role="status">The owner ended this service. Stop any remaining preparation for this order.</p>
+      <Button disabled={!connected||busy} onClick={()=>void run(()=>api(`/api/orders/${notice.orderId}/resolution-ack`,'POST',{}))}>Acknowledge · Order {notice.orderId}</Button>
+    </section>)}
+    {staff.role === 'kitchen' && (service.counterOrders.length > 0 || service.settings.mode !== 'table') &&
+      <CounterOrders service={service} connected={connected} onRefresh={refresh} onEditChange={setWorkspaceLocked} />}
     {staff.role === 'billing' && <div className="counter-actions actions">
       {(['open', 'paid'] as const).map(tab => <Button key={tab} variant={counterTab === tab ? 'default' : 'outline'} aria-pressed={counterTab === tab}
         onClick={() => { setCounterTab(tab); setCounterTable(undefined); }}><ClipboardList aria-hidden="true" />{tab === 'open' ? 'Open checks' : 'Paid checks'}</Button>)}
-      <Button id="paper-order-trigger" variant="outline" disabled={!connected || !waiters.length || !menu.length}
+      <Button id="paper-order-trigger" variant="outline" disabled={!connected || !waiters.length || !menu.length || !tableAccessible}
         onClick={() => setPaperEntry('setup')}>Enter paper order</Button>
     </div>}
     {staff.role === 'kitchen' && <div className="counter-actions"><Button id="menu-catalog-trigger" variant="outline" disabled={!connected}
@@ -295,7 +330,8 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
           <Button variant={listView ? 'default' : 'outline'} aria-pressed={listView} onClick={() => setListView(true)}>List view</Button></div>
       </div>
     </>}
-    {visible.length === 0 && <p className="panel muted">{tables.length && staff.role === 'waiter' ? 'No tables match your filters.' : emptyMessages[staff.role]}</p>}
+    {visible.length === 0 && !(staff.role === 'kitchen' && service.counterOrders.length > 0) &&
+      <p className="panel muted">{tables.length && staff.role === 'waiter' ? 'No tables match your filters.' : emptyMessages[staff.role]}</p>}
     <div className={billingDashboard ? 'counter-layout' : undefined}>
     {billingDashboard && counterChecks.length > 0 && <section className="panel counter-list" aria-label={`${counterTab === 'open' ? 'Open' : 'Paid'} checks`}>
       <div className="table-header"><h2>{counterTab === 'open' ? 'Open checks' : 'Paid checks'}</h2><strong>{formatPaise(counterChecks.reduce((sum, table) => sum + checkTotal(table), 0))}</strong></div>
@@ -328,7 +364,9 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
         </div>}
         {table.lines.length > 0 && <ul className="lines">
           {table.lines.map(line => <Dish key={line.id} line={line} role={staff.role}
-            canEdit={staff.role === 'waiter' && table.waiter?.id === staff.id && table.splitId === null && !table.hasReceipt}
+            canCorrect={staff.role==='billing'&&table.splitId===null&&!table.hasReceipt}
+            canEdit={staff.role === 'waiter' && table.waiter?.id === staff.id && table.splitId === null && !table.hasReceipt
+              && !(service.settings.changePolicy === 'blocked' && line.status === 'preparing')}
             disabled={busy || !connected} onRefresh={refresh}
             photo={staff.role === 'billing' ? <DishPhoto item={menu.find(item => item.name === line.name)} sample={samplePhotos} /> : undefined}
             change={status => void run(() => api(`/api/dishes/${line.id}`, 'PATCH', { status, revision: line.revision }))} />)}
@@ -338,13 +376,14 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
         </p>}
         {staff.role === 'billing' && table.orderId !== null &&
           <CheckSplit key={`billing-${table.orderId}`} table={table} connected={connected} onRefresh={refresh} />}
+        {isAdmin&&table.orderId!==null&&<TableResolution key={table.orderId} table={table} connected={connected} onRefresh={refresh}/>}
         {staff.role === 'waiter' && table.waiter?.id === staff.id && table.splitId !== null && !table.hasReceipt &&
           <p className="note">The counter split this check. Ask the counter to reopen it before changing the order.</p>}
         {staff.role === 'waiter' && table.waiter?.id === staff.id && table.hasReceipt &&
           <p className="note">The counter recorded a receipt. The order is locked.</p>}
         {staff.role === 'waiter' && (!table.waiter || table.waiter.id === staff.id) &&
           <Button id={`take-order-${table.id}`} variant="outline" className="order-trigger"
-            disabled={!connected || !menu.length || table.splitId !== null || table.hasReceipt} onClick={() => setTableId(table.id)}>
+            disabled={!connected || !menu.length || table.splitId !== null || table.hasReceipt || (service.settings.mode === 'counter' && table.orderId === null)} onClick={() => setTableId(table.id)}>
             <Plus aria-hidden="true" />{table.orderId ? 'Add to order' : 'Take order'}
           </Button>}
         {staff.role === 'waiter' && table.waiter?.id === staff.id &&
@@ -355,15 +394,17 @@ function Dashboard({ initial, onSignedOut }: { initial: ServiceState; onSignedOu
       </section>)}
     </div>
     </div>
+    {staff.role === 'waiter' && service.settings.changePolicy === 'blocked' && <p className="note">This outlet blocks dish changes once preparation starts.</p>}
     </>}
   </main></div>;
 }
 
-function Dish({ line, role, canEdit, disabled, change, onRefresh, photo }: {
+function Dish({ line, role, canEdit, canCorrect, disabled, change, onRefresh, photo }: {
   line: OrderLine;
   photo?: React.ReactNode;
   role: Role;
   canEdit: boolean;
+  canCorrect?: boolean;
   disabled: boolean;
   change: (status: 'preparing' | 'ready') => void;
   onRefresh: () => Promise<void>;
@@ -383,7 +424,7 @@ function Dish({ line, role, canEdit, disabled, change, onRefresh, photo }: {
       {line.status === 'queued' && <Button variant="outline" disabled={disabled} onClick={() => change('preparing')}><CirclePlay aria-hidden="true" />Start preparing</Button>}
       <Button disabled={disabled} onClick={() => change('ready')}><Check aria-hidden="true" />Mark ready</Button>
     </div>}
-    <DishChangeControls line={line} role={role} canEdit={canEdit} disabled={disabled} onRefresh={onRefresh} />
+    <DishChangeControls line={line} role={role} canEdit={canEdit} canCorrect={canCorrect} disabled={disabled} onRefresh={onRefresh} />
   </li>;
 }
 

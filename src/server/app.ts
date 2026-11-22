@@ -6,14 +6,19 @@ import { maxMenuPhotoBytes, paperOrderModes, paymentMethods, reportPeriods, type
 import { reopenSplit, saveSplit } from './check-splits.js';
 import { quoteCoupon, recordReceipt, releaseTable } from './receipt-handoff.js';
 import { createCoupon, readCouponRedemptions, readCoupons, setCouponEnabled } from './coupons.js';
-import { requestDishChange, resolveDishChange } from './order-changes.js';
+import { correctReadyDish, requestDishChange, resolveDishChange } from './order-changes.js';
 import { readWaiterActivity } from './waiter-activity.js';
 import { createMenuItem, setMenuAvailability, updateMenuItem } from './menu-catalog.js';
 import { readMenuPhoto, updateMenuPhoto } from './menu-photo.js';
 import { publicationStatus, publicationTarget, readGuestMenu } from './menu-publication.js';
 import { renderTableQr } from './table-qr.js';
 import { loadPrivateFeedback } from './receipt-feedback.js';
-import { authenticate, readMenu, readTables, readWaiters, submitOrder, updateDish, updatePlacement, WorkflowError } from './store.js';
+import { acknowledgeCounterCancellation, createCounterOrder, finishCounterOrder, payCounterOrder, readCounterOrders, readSettings, updateSettings } from './counter-service.js';
+import { serviceModes, type CounterDraft, type CounterPayment, type OutletSettings } from '../shared/contracts.js';
+import { roles } from '../shared/contracts.js';
+import { addStaffAccount, readStaffAccounts, resetStaffPassword, saveTable, updateStaffAccount } from './outlet-management.js';
+import { resolveTableBalance, tableResolutionQuote } from './table-resolution.js';
+import { authenticate, billableLines, checkVersion, readMenu, readTables, readWaiters, submitOrder, updateDish, updatePlacement, WorkflowError } from './store.js';
 
 const integerId = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER };
 const revisionSchema = { ...integerId, minimum: 0 };
@@ -176,8 +181,134 @@ export function buildApp(db: DatabaseSync, options: {
       menu: readMenu(db),
       waiters: staff.role === 'waiter' || staff.role === 'billing' ? readWaiters(db) : [],
       tables: readTables(db, staff, options.publication),
+      settings: readSettings(db),
+      counterOrders: readCounterOrders(db, staff, options.publication),
+      ...(staff.role==='admin'?{ resolutions:db.prepare(`SELECT r.order_id AS orderId,r.table_label AS tableLabel,
+        r.amount_paise AS amountPaise,r.reason,r.at,s.name AS owner FROM table_resolutions r JOIN staff s ON s.id=r.owner_id
+        ORDER BY r.at DESC,r.order_id DESC LIMIT 100`).all() }:{}),
+      ...(staff.role==='kitchen'?{tableCancellations:db.prepare('SELECT order_id AS orderId,table_label AS tableLabel FROM table_resolutions WHERE kitchen_ack_at IS NULL ORDER BY at').all()}:{}),
       ...(staff.role === 'admin' ? { publication: publicationStatus(db, options.publication), tableQr: tableQrDestination() } : {})
     });
+  });
+
+  app.patch<{ Body: OutletSettings }>('/api/outlet/settings', { schema: { body: {
+    type: 'object', additionalProperties: false, required: ['mode','revision'],
+    properties: { mode: { enum: serviceModes }, revision: revisionSchema, changePolicy: { enum: ['approval','blocked'] } }
+  } } }, (request, reply) => {
+    updateSettings(db, requireStaff(request, 'admin'), request.body);
+    return reply.code(204).send();
+  });
+  app.get<{Params:{id:string};Querystring:{orderId:string}}>('/api/tables/:id/resolution',{schema:{
+    params:idSchema,querystring:{type:'object',additionalProperties:false,required:['orderId'],properties:{orderId:{type:'string',pattern:'^[1-9][0-9]{0,14}$'}}}
+  }},request=>{
+    requireStaff(request,'admin');
+    return tableResolutionQuote(db,Number(request.params.id),Number(request.query.orderId));
+  });
+  app.post<{Params:{id:string};Body:{orderId:number;version:string;reason:string}}>('/api/tables/:id/resolution',{schema:{
+    params:idSchema,body:{type:'object',additionalProperties:false,required:['orderId','version','reason'],properties:{
+      orderId:integerId,version:{type:'string',pattern:'^[a-f0-9]{64}$'},reason:{type:'string',minLength:1,maxLength:500}
+    }}
+  }},(request,reply)=>{
+    resolveTableBalance(db,requireStaff(request,'admin'),Number(request.params.id),request.body);
+    return reply.code(204).send();
+  });
+  app.post<{Params:{id:string}}>('/api/orders/:id/resolution-ack',{schema:{params:idSchema,body:{type:'object',additionalProperties:false,properties:{}}}},
+    (request,reply)=>{
+      requireStaff(request,'kitchen');
+      if(!db.prepare('UPDATE table_resolutions SET kitchen_ack_at=COALESCE(kitchen_ack_at,?) WHERE order_id=?').run(Date.now(),Number(request.params.id)).changes) {
+        throw new WorkflowError(404,'Resolution notice not found.');
+      }
+      return reply.code(204).send();
+    });
+
+  app.get('/api/outlet/staff', request => {
+    requireStaff(request,'admin');
+    return { staff:readStaffAccounts(db) };
+  });
+  app.post<{ Body:{username:string;name:string;role:Role} }>('/api/outlet/staff', { schema:{ body:{
+    type:'object',additionalProperties:false,required:['username','name','role'],
+    properties:{username:{type:'string',pattern:'^[a-z0-9_-]{1,32}$'},name:{type:'string',minLength:1,maxLength:100},role:{enum:roles}}
+  } } }, request => addStaffAccount(db,requireStaff(request,'admin'),request.body));
+  app.patch<{ Params:{id:string};Body:{enabled:boolean} }>('/api/outlet/staff/:id',{schema:{params:idSchema,body:{
+    type:'object',additionalProperties:false,required:['enabled'],properties:{enabled:{type:'boolean'}}
+  }}},(request,reply)=>{
+    updateStaffAccount(db,requireStaff(request,'admin'),Number(request.params.id),request.body.enabled);
+    return reply.code(204).send();
+  });
+  app.post<{ Params:{id:string} }>('/api/outlet/staff/:id/password',{schema:{params:idSchema,body:{
+    type:'object',additionalProperties:false,properties:{}
+  }}},request=>resetStaffPassword(db,requireStaff(request,'admin'),Number(request.params.id)));
+  const tableBody = {type:'object',additionalProperties:false,required:['label'],properties:{label:{type:'string',minLength:1,maxLength:60}}};
+  app.post<{Body:{label:string}}>('/api/outlet/tables',{schema:{body:tableBody}},(request,reply)=>{
+    saveTable(db,requireStaff(request,'admin'),request.body.label);
+    return reply.code(204).send();
+  });
+  app.patch<{Params:{id:string};Body:{label:string}}>('/api/outlet/tables/:id',{schema:{params:idSchema,body:tableBody}},(request,reply)=>{
+    saveTable(db,requireStaff(request,'admin'),request.body.label,Number(request.params.id));
+    return reply.code(204).send();
+  });
+
+  app.post<{ Body: CounterDraft }>('/api/counter-orders', { schema: { body: {
+    ...orderSchema,
+    required: ['requestId','lines','fulfillment','customer','seating','paper','paperReference'],
+    properties: {
+      ...orderSchema.properties,
+      fulfillment: { enum: ['dine-in','takeaway'] }, customer: { type: 'string', maxLength: 100 },
+      seating: { type: 'string', maxLength: 60 }, paper: { enum: ['none','live','served'] },
+      paperReference: { type: 'string', maxLength: 100 }
+    }
+  } } }, (request, reply) => reply.send({ orderId: createCounterOrder(db, requireStaff(request, 'billing'), request.body) }));
+
+  app.post<{ Params: { id: string }; Body: CounterPayment }>('/api/counter-orders/:id/payment', { schema: {
+    params: idSchema, body: {
+      type: 'object', additionalProperties: false, required: ['requestId','revision','reference','officialTotalPaise','paymentMethod'],
+      properties: {
+        requestId: requestIdSchema, revision: revisionSchema, reference: { type: 'string', minLength: 1, maxLength: 100 },
+        officialTotalPaise: moneySchema, paymentMethod: { enum: paymentMethods },
+        coupon: { type: 'object', additionalProperties: false, required: ['code','discountPaise'], properties: { code: couponInput, discountPaise: positiveMoney } }
+      }
+    }
+  } }, (request, reply) => reply.send({
+    orderId: payCounterOrder(db, requireStaff(request, 'billing'), Number(request.params.id), request.body, options.publication?.endpoint)
+  }));
+  app.post<{Params:{id:string};Body:DishChangeRequest & {reason:string}}>('/api/dishes/:id/correction',{schema:{
+    params:idSchema,body:{type:'object',additionalProperties:false,required:['requestId','revision','quantity','note','reason'],properties:{
+      requestId:requestIdSchema,revision:revisionSchema,quantity:{type:'integer',minimum:0,maximum:99},
+      note:{type:'string',maxLength:300},reason:{type:'string',minLength:1,maxLength:500}
+    }}
+  }},request=>correctReadyDish(db,Number(request.params.id),requireStaff(request,'billing'),request.body));
+
+  app.post<{ Params: { id: string }; Body: { revision: number; code: string } }>('/api/counter-orders/:id/coupon', { schema: {
+    params: idSchema, body: {
+      type: 'object', additionalProperties: false, required: ['revision','code'],
+      properties: { revision: revisionSchema, code: couponInput }
+    }
+  } }, (request, reply) => {
+    requireStaff(request, 'billing');
+    const orderId = Number(request.params.id);
+    const current = readCounterOrders(db, { id: 0, name: '', role: 'billing' }).find(order => order.id === orderId);
+    if (!current || current.revision !== request.body.revision || current.status !== 'awaiting-payment') throw new WorkflowError(409, 'Open the current unpaid order.');
+    return reply.send(quoteCoupon(db, null, { orderId, splitId: null, checkNumber: 1, code: request.body.code,
+      checkVersion: checkVersion(billableLines(db, orderId)) }, options.publication?.endpoint));
+  });
+
+  app.post<{ Params: { id: string }; Body: Parameters<typeof finishCounterOrder>[3] }>('/api/counter-orders/:id/action', { schema: {
+    params: idSchema, body: {
+      type: 'object', additionalProperties: false, required: ['requestId','revision','action','reason','reference'],
+      properties: {
+        requestId: requestIdSchema, revision: revisionSchema, action: { enum: ['collect','cancel','refund','reduce'] },
+        reason: { type: 'string', maxLength: 500 }, reference: { type: 'string', maxLength: 100 },
+        lineId: integerId, quantity: { type:'integer',minimum:1,maximum:99 }, amountPaise: moneySchema
+      }
+    }
+  } }, (request, reply) => reply.send({
+    orderId: finishCounterOrder(db, requireStaff(request, 'billing'), Number(request.params.id), request.body)
+  }));
+  app.post<{Params:{id:string}}>('/api/counter-orders/:id/kitchen-ack',{schema:{params:idSchema,body:{
+    type:'object',additionalProperties:false,properties:{}
+  }}},(request,reply)=>{
+    acknowledgeCounterCancellation(db,requireStaff(request,'kitchen'),Number(request.params.id));
+    return reply.code(204).send();
   });
 
   app.post<{ Body: MenuItemDetails & { requestId: string } }>('/api/menu', {

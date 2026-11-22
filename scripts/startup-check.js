@@ -12,6 +12,27 @@ import { test } from 'node:test';
 import { buildApp } from '../dist/server/app.js';
 import { createStaff, openStore } from '../dist/server/store.js';
 
+test('counter sample and empty outlet setup provision the selected service mode without unnecessary tables', () => {
+  const directory=mkdtempSync(join(tmpdir(),'restaurant-modes-'));
+  try {
+    for (const [name,args] of [['counter',['--demo','--mode=counter']],['outlet',['--outlet','--mode=both']]]) {
+      const path=join(directory,`${name}.sqlite`);
+      const setup=spawnSync(process.execPath,['dist/server/setup.js',...args],{
+        env:{...process.env,RESTAURANT_DB:path},encoding:'utf8',windowsHide:true
+      });
+      assert.equal(setup.status,0,setup.stderr);
+      const db=openStore(path);
+      try {
+        assert.equal(db.prepare('SELECT mode FROM outlet_settings').get().mode,name==='counter'?'counter':'both');
+        assert.equal(db.prepare('SELECT count(*) AS n FROM dining_tables').get().n,0);
+        assert.equal(db.prepare("SELECT count(*) AS n FROM staff WHERE role='waiter'").get().n,name==='counter'?0:2);
+        assert.equal(db.prepare('SELECT count(*) AS n FROM menu').get().n,name==='counter'?4:0);
+        assert.equal(db.prepare("SELECT count(*) AS n FROM staff WHERE role='admin' AND enabled=1").get().n,1);
+      } finally {db.close();}
+    }
+  } finally {rmSync(directory,{recursive:true,force:true});}
+});
+
 test('sample setup and the Windows-hosted process preserve orders across a service restart', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'restaurant-startup-'));
   const socket = createServer().listen(0, '127.0.0.1');

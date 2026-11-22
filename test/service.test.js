@@ -9,7 +9,7 @@ import sharp from 'sharp';
 import { after, before, test } from 'node:test';
 import { buildApp } from '../dist/server/app.js';
 import { publicationTarget } from '../dist/server/menu-publication.js';
-import { createStaff, openStore } from '../dist/server/store.js';
+import { createStaff, openStore, storeSchemaVersion } from '../dist/server/store.js';
 import { tableQrPreviewUrl } from '../dist/server/table-qr.js';
 import { readWaiterActivity } from '../dist/server/waiter-activity.js';
 
@@ -117,7 +117,8 @@ test('existing menu records keep their IDs, prices and availability when categor
   legacy.exec(`
     CREATE TABLE menu (id INTEGER PRIMARY KEY, name TEXT, price_paise INTEGER, available INTEGER);
     CREATE TABLE order_lines (id INTEGER PRIMARY KEY, quantity INTEGER, note TEXT, status TEXT);
-    CREATE TABLE orders (id INTEGER PRIMARY KEY);
+    CREATE TABLE dining_tables (id INTEGER PRIMARY KEY, label TEXT);
+    CREATE TABLE orders (id INTEGER PRIMARY KEY, table_id INTEGER REFERENCES dining_tables(id), waiter_id INTEGER REFERENCES staff(id), opened_at INTEGER NOT NULL, closed_at INTEGER);
     CREATE TABLE staff (id INTEGER PRIMARY KEY);
     CREATE TABLE order_requests (request_id TEXT, waiter_id INTEGER, payload TEXT);
     INSERT INTO staff VALUES (1);
@@ -136,7 +137,7 @@ test('existing menu records keep their IDs, prices and availability when categor
       { id: 17, quantity: 2, note: 'Less spicy', status: 'preparing', revision: 0, cancelled_at: null, entry_source: 'waiter' });
     assert.deepEqual({ ...upgraded.prepare('SELECT * FROM order_requests').get() },
       { request_id: 'old-request', actor_id: 1, payload: 'old-payload', credited_waiter_id: 1, submitted_at: null });
-    assert.equal(upgraded.prepare('PRAGMA user_version').get().user_version, 13);
+    assert.equal(upgraded.prepare('PRAGMA user_version').get().user_version, storeSchemaVersion);
   } finally {
     upgraded.close();
   }

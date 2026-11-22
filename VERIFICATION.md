@@ -1,5 +1,48 @@
 # Development verification
 
+## Version 0.2.0 service modes
+
+Table service, pay-first Counter service, and Both are implemented. The owner approved counter approval or blocked changes after preparation starts, partial and full paid counter corrections/refunds, and owner resolution for unpaid table service.
+
+The database migration preserves existing table orders and receipts, introduces counter orders without artificial stored tables or waiter assignments, and keeps payment confirmation, coupon redemption, feedback-code issuance, and token assignment in one transaction. Paid cancellations and owner resolutions retain their audit history. Kitchen staff acknowledge full cancellation notices. Pending orders and unresolved financial work remain available after restart or a mode change.
+
+Owners can provision accounts and tables through the overview. New staff passwords are generated and returned for private handoff, omitted from account listings and audit records, and session access is revoked on disable or password reset. A fresh counter-only sample requires no waiter or table records. Empty real-outlet setup is available through the bundled runtime.
+
+### Local acceptance coverage
+
+The 0.2.0 build passed type checking, production bundling, 34 service/storage tests, three provisioning/startup/HTTPS tests, the Edge walkthrough, two hosted PostgreSQL/HTTPS tests, and the Windows installer regression. The exact final ZIP passed its SHA-256 comparison and installer check. The dependency audit reported zero advisories, the targeted source credential-pattern scan found no matches, and the design scan returned no findings in the reviewed UI files. These local checks do not replace the physical and staged release checks below.
+
+The Windows check covered installation, order persistence through process restarts, modified-payload rejection, update validation, compatible rollback, and refusal to roll back onto an unsupported newer database. Automatic startup after an actual Windows reboot remains pending.
+
+The existing preview database was first validated on a copy with the bundled Node 22.23.4 runtime, then migrated from schema 13 to 17. The preview runs in Both mode, returned HTTP 200, and its existing sample admin account authenticated successfully. The sample credential file is unchanged. Screenshots for the new flow are in `data/counter-service-check`, including counter views at 390 and 1280 px.
+
+| Area | Checks |
+| --- | --- |
+| Migration and persistence | Legacy table references, price snapshots, reopening the database, pending orders, and stable payment retry results. |
+| Pay-first enforcement | Unpaid orders stay out of the kitchen and reject direct dish-state writes. Roles restrict confirmation, configuration, and financial corrections. |
+| Transaction failures | Simulated SQLite storage limit and an interrupted token write leave no partial payment, receipt, feedback code, token, or kitchen order. Recovery can retry the original request. |
+| Concurrency and numbering | Competing confirmations yield one receipt and token. India-midnight numbering and a backwards date change preserve token uniqueness. |
+| Corrections | Partial and full cancellations, refunds bounded by the original paid amount, original receipt retention, stale kitchen revisions, post-collection corrections, and manual refund references. |
+| Table service | Preparing-dish policy, audited ready-dish correction before receipt or split, locked paid edits, owner balance review, stale balance rejection, and a distinct next-service identity. |
+| Browser | Mixed-service ordering, resizing a draft, an interrupted payment response, token printing, partial refund recording, kitchen readiness, collection, owner setup, and owner resolution with kitchen acknowledgment. |
+| Layout | Counter view at 320, 390, 768, and 1280 px, keyboard and control labels, automated accessibility assertions, and shared admin navigation. |
+
+The counter history view shows seven days of closed orders plus unresolved work. Period reports use retained database history. Payment and refund outcomes are manually recorded from the external billing/payment system. Physical phones, actual receipt/printer integration, staff-network isolation, real SMS, Windows boot registration, and production staging remain pending. A supported backup-and-restore workflow remains a production recovery decision.
+
+### Counter and mixed-service handoff
+
+On the development Windows computer, open `http://127.0.0.1:3100/` with separate browser profiles for `admin`, `billing`, and `kitchen`. The existing sample passwords are in `data/preview-accounts.txt`. For a fresh isolated counter sample, follow README.md and use a new database path. Save its generated account credentials privately. A phone handoff must supply the actual trusted staff-network HTTPS address before testing.
+
+1. As admin, choose **Change service mode → Table and counter service → Confirm service mode**.
+2. As billing, choose **Counter orders → New counter order → Takeaway → Choose dishes**. Add two Paneer tikka at ₹240 each. Review the ₹480 draft and choose **Save for payment**. Expect an unpaid order with no kitchen token.
+3. Confirm the kitchen has received no counter dishes. In the outlet's test billing/payment system, record the payment. At the portal counter, enter reference `PILOT-COUNTER-001`, amount `480`, and Cash. Choose **Record payment and issue token**. Expect one token and one kitchen ticket. Use a fresh reference for each repeat of this walkthrough.
+4. Mark the counter dish ready in the kitchen. At billing, choose **Confirm collected** and inspect History. Print the token and verify that reprinting keeps the same token and omits customer identifiers.
+5. From the paid order, choose **Cancel some items**. Cancel one portion with refund amount `240` and reason `Pilot correction`. Process the actual refund in the external test system, then choose **Record external refund** and enter `PILOT-REFUND-001`. Expect one remaining portion, the original ₹480 receipt, and a recorded ₹240 correction.
+6. Start a paper order using a distinct original paper reference. Choose **Already served**, select a dish, and record its payment. Expect it to be ready at the counter and absent from kitchen preparation. Repeat with a Live paper order and verify preparation starts after payment confirmation.
+7. As admin, open **Manage staff and tables**. Create a test waiter with username `pilot-waiter`, save the generated credentials privately, and add `Pilot table`. Verify the new waiter can sign in. Disable that account and verify its session loses access.
+8. On an unpaid table order, have the owner choose **Review unpaid resolution**, check the displayed balance against the billing product, enter `Pilot owner resolution`, and confirm. Expect the table to become available, the resolution to remain in owner history, and the kitchen to receive a stop-preparation notice requiring acknowledgment.
+9. Repeat local ordering with the internet uplink disconnected while staff Wi-Fi stays powered. Restore it and verify menu publication catches up. Test the physical printer and Windows reboot on the designated pilot device. Record the build, device/browser, result, and first differing step.
+
 ## Counter workflow UI review
 
 - Table moves, waiter transfers, and joins show the source and require an eligible destination before confirmation. The form keeps its selection after an interrupted request and explains when a refreshed destination or source is no longer eligible.

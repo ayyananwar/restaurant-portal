@@ -13,23 +13,25 @@ const outcomeLabel = {
   expired: 'Change expired when the dish became ready'
 };
 
-export function DishChangeControls({ line, role, canEdit, disabled, onRefresh }: {
+export function DishChangeControls({ line, role, canEdit, canCorrect = false, disabled, onRefresh }: {
   line: OrderLine;
   role: Role;
   canEdit: boolean;
+  canCorrect?: boolean;
   disabled: boolean;
   onRefresh: () => Promise<void>;
 }) {
-  const [editor, setEditor] = useState<{ mode: 'edit' | 'cancel'; revision: number; quantity: number; note: string } | null>(null);
-  const [retry, setRetry] = useState<DishChangeRequest | null>(null);
+  const [editor, setEditor] = useState<{ mode: 'edit' | 'cancel'; revision: number; quantity: number; note: string; correction:boolean } | null>(null);
+  const [retry, setRetry] = useState<(DishChangeRequest & {reason?:string}) | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const pending = line.change?.outcome === 'pending' ? line.change : null;
-  const editable = canEdit && (line.status === 'queued' || line.status === 'preparing');
+  const correctable=canCorrect&&line.status==='ready';
+  const editable = (canEdit && (line.status === 'queued' || line.status === 'preparing'))||correctable;
 
   function open(mode: 'edit' | 'cancel') {
     setError('');
-    setEditor({ mode, revision: line.revision, quantity: line.quantity, note: line.note });
+    setEditor({ mode, revision: line.revision, quantity: line.quantity, note: line.note, correction:correctable });
   }
 
   async function save(event: FormEvent<HTMLFormElement>) {
@@ -40,12 +42,13 @@ export function DishChangeControls({ line, role, canEdit, disabled, onRefresh }:
       requestId: crypto.randomUUID(),
       revision: editor.revision,
       quantity: editor.mode === 'cancel' ? 0 : Number(values.get('quantity')),
-      note: editor.mode === 'cancel' ? editor.note : String(values.get('note'))
+      note: editor.mode === 'cancel' ? editor.note : String(values.get('note')),
+      ...(editor.correction?{reason:String(values.get('reason'))}:{})
     };
     setError('');
     setBusy(true);
     try {
-      await api(`/api/dishes/${line.id}/changes`, 'POST', request);
+      await api(`/api/dishes/${line.id}/${editor.correction?'correction':'changes'}`, 'POST', request);
       setEditor(null);
       setRetry(null);
       await onRefresh();
@@ -85,14 +88,14 @@ export function DishChangeControls({ line, role, canEdit, disabled, onRefresh }:
       <Button variant="outline" disabled={busy || disabled} onClick={() => void resolve(false)}>Decline change</Button>
     </div>}
     {editable && !pending && !editor && <div className="actions">
-      <Button variant="outline" disabled={disabled} onClick={() => open('edit')}>Change dish</Button>
-      <Button variant="ghost" disabled={disabled} onClick={() => open('cancel')}>Cancel dish</Button>
+      <Button variant="outline" disabled={disabled} onClick={() => open('edit')}>{correctable?'Correct ready dish':'Change dish'}</Button>
+      <Button variant="ghost" disabled={disabled} onClick={() => open('cancel')}>{correctable?'Cancel ready dish':'Cancel dish'}</Button>
     </div>}
     {editor && <form className="dish-change-form" onSubmit={save}>
       {editor.mode === 'edit' ? <>
         <Field>
           <FieldLabel htmlFor={`edit-quantity-${line.id}`}>Quantity</FieldLabel>
-          <Input id={`edit-quantity-${line.id}`} name="quantity" type="number" min={1} max={99}
+          <Input id={`edit-quantity-${line.id}`} name="quantity" type="number" min={1} max={editor.correction?editor.quantity:99}
             defaultValue={editor.quantity} required disabled={busy || !!retry} />
         </Field>
         <Field>
@@ -100,6 +103,8 @@ export function DishChangeControls({ line, role, canEdit, disabled, onRefresh }:
           <Input id={`edit-note-${line.id}`} name="note" maxLength={300} defaultValue={editor.note} disabled={busy || !!retry} />
         </Field>
       </> : <p>Cancel {line.name} from this order?</p>}
+      {editor.correction&&<Field><FieldLabel htmlFor={`correction-reason-${line.id}`}>Correction reason</FieldLabel>
+        <Input id={`correction-reason-${line.id}`} name="reason" maxLength={500} required disabled={busy||!!retry}/></Field>}
       {line.status === 'preparing' && <p className="note">The counter must approve changes after preparation starts.</p>}
       <div className="actions">
         <Button type="submit" variant={editor.mode === 'cancel' ? 'destructive' : 'default'}

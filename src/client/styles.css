@@ -89,7 +89,7 @@ h2 { font-size: 1.125rem; font-weight: 700; }
 .dish-change [data-slot="badge"] { white-space: normal; }
 .note, .item-text, .draft-item strong { overflow-wrap: anywhere; }
 .note { font-size: .875rem; }
-.total { border-top: 1px solid var(--border); padding-top: var(--space-3); font-variant-numeric: tabular-nums; }
+.total { flex-wrap: wrap; border-top: 1px solid var(--border); padding-top: var(--space-3); font-variant-numeric: tabular-nums; }
 .total strong { font-size: 1.25rem; }
 .login-fields { display: grid; gap: var(--space-3); }
 .actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
@@ -181,6 +181,18 @@ h2 { font-size: 1.125rem; font-weight: 700; }
 }
 .paper-order-setup { max-width: 32rem; }
 .counter-actions { margin-bottom: var(--space-4); }
+.counter-orders { display: grid; gap: var(--space-4); margin-bottom: var(--space-4); }
+.counter-orders h3 { font-size: 1.15rem; font-weight: 700; overflow-wrap: anywhere; }
+.counter-orders article { overflow-wrap: anywhere; }
+.counter-payment { display: grid; gap: var(--space-3); }
+.outlet-settings { margin-bottom: var(--space-4); }
+.table-resolution { padding: var(--space-3); border-top: 1px solid var(--border); }
+.counter-token-slip { display: none; }
+@media print {
+  body:has([data-print-counter]) *:not(:has([data-print-counter]), [data-print-counter], [data-print-counter] *) { display: none; }
+  body:has([data-print-counter]) :has([data-print-counter]), [data-print-counter] { display: block; padding: 0; margin: 0; border: 0; background: white; box-shadow: none; }
+  .counter-token-slip { color: black; max-width: 80mm; padding: 5mm !important; }
+}
 .receipt-handoff { display: grid; gap: var(--space-2); }
 .receipt-handoff > button { justify-self: start; }
 .receipt-reference { min-width: 0; overflow-wrap: anywhere; }

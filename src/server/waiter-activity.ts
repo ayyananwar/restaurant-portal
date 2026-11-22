@@ -46,6 +46,21 @@ export function readWaiterActivity(db: DatabaseSync, period: ReportPeriod, selec
   return {
     period, anchorDate, startDate: dateText(start), endDate: dateText(new Date(end.valueOf() - dayMs)),
     timezone: 'Asia/Kolkata',
+    counter: db.prepare(`
+      SELECT s.name AS cashier,c.fulfillment,COUNT(*) AS orders,
+        COALESCE(SUM(r.item_total_paise),0) AS itemTotalPaise,
+        COALESCE(SUM(r.official_total_paise),0) AS officialTotalPaise,
+        SUM(c.cancelled_at IS NOT NULL) AS cancelled,
+        COALESCE(SUM(a.needed),0) AS refundNeededPaise,
+        COALESCE(SUM(a.refunded),0) AS refundedPaise
+      FROM counter_orders c JOIN orders o ON o.id=c.order_id JOIN staff s ON s.id=c.cashier_id
+      LEFT JOIN check_receipts r ON r.order_id=c.order_id AND r.check_number=1
+      LEFT JOIN (SELECT order_id,SUM(CASE WHEN reference IS NULL THEN amount_paise ELSE 0 END) AS needed,
+        SUM(CASE WHEN reference IS NOT NULL THEN amount_paise ELSE 0 END) AS refunded
+        FROM counter_corrections GROUP BY order_id) a ON a.order_id=c.order_id
+      WHERE o.opened_at>=? AND o.opened_at<?
+      GROUP BY s.id,c.fulfillment ORDER BY s.name,c.fulfillment
+    `).all(start.valueOf() - outletOffsetMs, end.valueOf() - outletOffsetMs) as unknown as WaiterActivityReport['counter'],
     rows: rows.map(row => ({ ...row, enabled: row.enabled === 1 }))
   };
 }

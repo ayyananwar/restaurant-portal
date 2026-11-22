@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { promisify } from 'node:util';
 import type { CheckItem, CheckReceipt, DishStatus, MenuItem, OrderLine, OrderRequest, PaperOrderDetails, PlacementRequest, Role, Staff, Table } from '../shared/contracts.js';
 
-export const storeSchemaVersion = 13;
+export const storeSchemaVersion = 17;
 
 export class WorkflowError extends Error {
   constructor(readonly statusCode: number, message: string) {
@@ -296,14 +296,100 @@ export function openStore(path: string) {
       throw error;
     }
   }
+  if (version < 14) {
+    // Rebuild the parent without renaming it first, preserving existing child references.
+    db.exec('PRAGMA foreign_keys = OFF; BEGIN IMMEDIATE;');
+    try {
+      db.exec(`
+        CREATE TABLE orders_next (
+          id INTEGER PRIMARY KEY, table_id INTEGER REFERENCES dining_tables(id),
+          waiter_id INTEGER REFERENCES staff(id), opened_at INTEGER NOT NULL,
+          closed_at INTEGER, closed_by INTEGER REFERENCES staff(id),
+          CHECK ((table_id IS NULL) = (waiter_id IS NULL))
+        );
+        INSERT INTO orders_next SELECT id, table_id, waiter_id, opened_at, closed_at, closed_by FROM orders;
+        DROP TABLE orders;
+        ALTER TABLE orders_next RENAME TO orders;
+        CREATE UNIQUE INDEX active_table_order ON orders(table_id) WHERE closed_at IS NULL;
+        CREATE TABLE outlet_settings (id INTEGER PRIMARY KEY CHECK(id=1), mode TEXT NOT NULL CHECK(mode IN ('table','counter','both')), revision INTEGER NOT NULL);
+        INSERT INTO outlet_settings VALUES (1, 'table', 0);
+        CREATE TABLE outlet_audit (id INTEGER PRIMARY KEY, actor_id INTEGER NOT NULL REFERENCES staff(id), at INTEGER NOT NULL, previous_mode TEXT NOT NULL, next_mode TEXT NOT NULL);
+        CREATE TABLE counter_orders (
+          order_id INTEGER PRIMARY KEY REFERENCES orders(id), revision INTEGER NOT NULL DEFAULT 0,
+          cashier_id INTEGER NOT NULL REFERENCES staff(id),
+          fulfillment TEXT NOT NULL CHECK(fulfillment IN ('dine-in','takeaway')),
+          customer TEXT NOT NULL, seating TEXT NOT NULL,
+          paper TEXT NOT NULL CHECK(paper IN ('none','live','served')), paper_reference TEXT NOT NULL,
+          token_date TEXT, token_number INTEGER, collected_at INTEGER, cancelled_at INTEGER,
+          UNIQUE(token_date, token_number)
+        );
+        CREATE TABLE counter_requests (
+          actor_id INTEGER NOT NULL REFERENCES staff(id), request_id TEXT NOT NULL,
+          action TEXT NOT NULL, payload TEXT NOT NULL, order_id INTEGER NOT NULL REFERENCES orders(id),
+          PRIMARY KEY(actor_id, request_id)
+        );
+        CREATE TABLE counter_adjustments (
+          order_id INTEGER PRIMARY KEY REFERENCES counter_orders(order_id),
+          reason TEXT NOT NULL, amount_paise INTEGER NOT NULL,
+          actor_id INTEGER NOT NULL REFERENCES staff(id), at INTEGER NOT NULL,
+          reference TEXT, resolved_by INTEGER REFERENCES staff(id), resolved_at INTEGER
+        );
+      `);
+      if (db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Database migration failed its reference check.');
+      db.exec('PRAGMA user_version = 14; COMMIT;');
+    } catch (error) {
+      db.exec('ROLLBACK;');
+      db.close();
+      throw error;
+    }
+    db.exec('PRAGMA foreign_keys = ON;');
+  }
+  if (version < 15) {
+    db.exec(`
+      BEGIN IMMEDIATE;
+      ALTER TABLE outlet_settings ADD COLUMN change_policy TEXT NOT NULL DEFAULT 'approval' CHECK(change_policy IN ('approval','blocked'));
+      CREATE TABLE counter_corrections (
+        id INTEGER PRIMARY KEY, order_id INTEGER NOT NULL REFERENCES counter_orders(order_id),
+        reason TEXT NOT NULL, amount_paise INTEGER NOT NULL CHECK(amount_paise>=0),
+        actor_id INTEGER NOT NULL REFERENCES staff(id), at INTEGER NOT NULL,
+        reference TEXT, resolved_by INTEGER REFERENCES staff(id), resolved_at INTEGER,
+        item TEXT NOT NULL DEFAULT '', quantity INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT INTO counter_corrections(order_id,reason,amount_paise,actor_id,at,reference,resolved_by,resolved_at)
+        SELECT order_id,reason,amount_paise,actor_id,at,reference,resolved_by,resolved_at FROM counter_adjustments;
+      DROP TABLE counter_adjustments;
+      CREATE TABLE configuration_events (
+        id INTEGER PRIMARY KEY, actor_id INTEGER NOT NULL REFERENCES staff(id), at INTEGER NOT NULL,
+        action TEXT NOT NULL, details TEXT NOT NULL
+      );
+      PRAGMA user_version=15;
+      COMMIT;
+    `);
+  }
+  if (version < 16) {
+    db.exec('BEGIN IMMEDIATE; ALTER TABLE counter_orders ADD COLUMN kitchen_ack_at INTEGER; PRAGMA user_version=16; COMMIT;');
+  }
+  if (version < 17) {
+    db.exec(`BEGIN IMMEDIATE;
+      CREATE TABLE table_resolutions (
+        order_id INTEGER PRIMARY KEY REFERENCES orders(id),table_label TEXT NOT NULL,
+        amount_paise INTEGER NOT NULL CHECK(amount_paise>0),reason TEXT NOT NULL,
+        owner_id INTEGER NOT NULL REFERENCES staff(id),at INTEGER NOT NULL,kitchen_ack_at INTEGER
+      );
+      PRAGMA user_version=17; COMMIT;`);
+  }
   return db;
 }
 
-export function createStaff(db: DatabaseSync, username: string, name: string, role: Role, password: string) {
+export function hashPassword(password: string) {
   const salt = randomBytes(16).toString('hex');
   const digest = scryptSync(password, salt, 64, passwordOptions).toString('hex');
+  return `${salt}:${digest}`;
+}
+
+export function createStaff(db: DatabaseSync, username: string, name: string, role: Role, password: string) {
   db.prepare('INSERT INTO staff (username, name, role, password_hash) VALUES (?, ?, ?, ?)')
-    .run(username, name, role, `${salt}:${digest}`);
+    .run(username, name, role, hashPassword(password));
 }
 
 export async function authenticate(db: DatabaseSync, username: string, password: string): Promise<Staff | undefined> {
@@ -457,6 +543,9 @@ export function submitOrder(db: DatabaseSync, tableId: number, actorId: number, 
       throw new WorkflowError(404, 'Table not found.');
     }
     const active = db.prepare('SELECT id, waiter_id FROM orders WHERE table_id = ? AND closed_at IS NULL').get(tableId);
+    if (!active && db.prepare("SELECT mode FROM outlet_settings WHERE id=1").get()?.mode === 'counter') {
+      throw new WorkflowError(409, 'This outlet uses counter service. Start a counter order.');
+    }
     if (request.expectedOrderId !== undefined && request.expectedOrderId !== (active?.id ?? null)) {
       throw new WorkflowError(409, 'This table’s order changed. Check the table before sending.');
     }
@@ -559,6 +648,10 @@ export function updateDish(db: DatabaseSync, lineId: number, status: Extract<Dis
     const current = db.prepare(`
       SELECT l.status, l.revision FROM order_lines l JOIN orders o ON o.id = l.order_id
       WHERE l.id = ? AND l.cancelled_at IS NULL AND l.entry_source <> 'paper-served' AND o.closed_at IS NULL
+        AND (o.table_id IS NOT NULL OR EXISTS (
+          SELECT 1 FROM counter_orders c JOIN check_receipts r ON r.order_id=c.order_id
+          WHERE c.order_id=o.id AND c.token_number IS NOT NULL AND c.cancelled_at IS NULL AND r.payment_method IS NOT NULL
+        ))
     `).get(lineId);
     if (!current) throw new WorkflowError(404, 'Active dish not found.');
     if (current.status !== status) {

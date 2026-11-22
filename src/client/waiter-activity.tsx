@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { reportPeriods, type ReportPeriod, type WaiterActivityReport } from '../shared/contracts.js';
 import { api, message } from './api.js';
 import { BarChart3, UsersRound } from 'lucide-react';
+import { formatPaise } from './money.js';
 
 const periodNames = { day: 'Day', week: 'Week', month: 'Month' };
 const dateFormat = new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
@@ -85,6 +86,17 @@ export function WaiterActivity({ onClose }: { onClose: () => void }) {
             </tr>)}
           </tbody>
         </table>}
+      <h3>Counter activity</h3>
+      <p className="note">Orders opened in this period, grouped by cashier and service type. Amounts reflect their current receipt and refund records.</p>
+      {!report.counter.length ? <p className="note">No counter orders in this period.</p> :
+        <ul className="split-summary">{report.counter.map(row => <li key={`${row.cashier}-${row.fulfillment}`}>
+          <strong>{row.cashier} · {row.fulfillment === 'takeaway' ? 'Takeaway' : 'Dine-in'}</strong>
+          <p>{numberFormat.format(row.orders)} orders · {numberFormat.format(row.cancelled)} cancelled</p>
+          <p>Recorded item subtotal · {formatPaise(row.itemTotalPaise)}</p>
+          <p>Official receipt amounts · {formatPaise(row.officialTotalPaise)}</p>
+          <p>Refunds recorded · {formatPaise(row.refundedPaise)}</p>
+          <p>Refunds needed · {formatPaise(row.refundNeededPaise)}</p>
+        </li>)}</ul>}
     </>}
   </section>;
 }

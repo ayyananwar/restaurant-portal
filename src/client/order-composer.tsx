@@ -13,7 +13,7 @@ import { ArrowLeft, ChefHat, ClipboardList, Grid2X2, Plus, Search, Utensils } fr
 type DraftLine = OrderRequest['lines'][number] & { id: string; item: MenuItem };
 const wideScreen = '(min-width: 64rem)';
 
-export function OrderComposer({ table, menu, connected, canOrder, paper, samplePhotos, onClose, onRefresh }: {
+export function OrderComposer({ table, menu, connected, canOrder, paper, samplePhotos, onClose, onRefresh, counter }: {
   table: Table;
   menu: MenuItem[];
   connected: boolean;
@@ -22,6 +22,7 @@ export function OrderComposer({ table, menu, connected, canOrder, paper, sampleP
   samplePhotos?: boolean;
   onClose: () => void;
   onRefresh: () => Promise<void>;
+  counter?: { label: string; served: boolean; onSave: (order: OrderRequest) => Promise<void> };
 }) {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<string | null>(null);
@@ -66,7 +67,7 @@ export function OrderComposer({ table, menu, connected, canOrder, paper, sampleP
   const results = filterMenu(menu, query, category);
   const quantity = draft.reduce((sum, line) => sum + line.quantity, 0);
   const total = draft.reduce((sum, line) => sum + line.quantity * (menuById.get(line.menuId) ?? line.item).pricePaise, 0);
-  const served = paper?.mode === 'served';
+  const served = paper?.mode === 'served' || counter?.served;
   const unavailable = draft.some(line => {
     const item = menuById.get(line.menuId);
     return !item || (!served && !item.available);
@@ -118,7 +119,8 @@ export function OrderComposer({ table, menu, connected, canOrder, paper, sampleP
     setPending(order);
     setError('');
     try {
-      await api(`/api/tables/${table.id}/${paper ? 'paper-orders' : 'orders'}`, 'POST',
+      if (counter) await counter.onSave(order);
+      else await api(`/api/tables/${table.id}/${paper ? 'paper-orders' : 'orders'}`, 'POST',
         paper ? { ...order, mode: paper.mode, creditedWaiterId: paper.creditedWaiterId } : order);
       await onRefresh();
       close();
@@ -138,13 +140,13 @@ export function OrderComposer({ table, menu, connected, canOrder, paper, sampleP
     <header className="composer-header">
       <div>
         <h2 id="composer-title" className="sr-only" tabIndex={-1} ref={heading}>
-          {paper ? served ? 'Already-served paper order' : 'Live paper order' : table.orderId ? 'Add to order' : 'Take order'}
+          {counter ? 'Counter order' : paper ? served ? 'Already-served paper order' : 'Live paper order' : table.orderId ? 'Add to order' : 'Take order'}
         </h2>
-        <p className="composer-table-label"><Grid2X2 aria-hidden="true" /><span><small>Table / Customer</small><strong>{table.label}</strong></span></p>
+        <p className="composer-table-label"><Grid2X2 aria-hidden="true" /><span><small>{counter ? 'Counter order' : 'Table / Customer'}</small><strong>{counter?.label ?? table.label}</strong></span></p>
         {paper && <p className="note">Credit {paper.waiterName} · {served ? 'Add to the check only' : 'Send to the kitchen'}</p>}
       </div>
       <Button variant="secondary" disabled={busy || !!pending}
-        onClick={() => draft.length ? dialog.current?.showModal() : close()}><ArrowLeft aria-hidden="true" />Back to tables</Button>
+        onClick={() => draft.length ? dialog.current?.showModal() : close()}><ArrowLeft aria-hidden="true" />{counter ? 'Back to counter' : 'Back to tables'}</Button>
     </header>
     {!canOrder && <p className="error" role="alert">{table.hasReceipt
       ? 'The counter recorded a receipt. Return to tables to continue.'
@@ -242,7 +244,7 @@ export function OrderComposer({ table, menu, connected, canOrder, paper, sampleP
         {error && <p className="error" role="alert">{error}{pending ? ' Retry to check whether the order was saved.' : ''}</p>}
         <p className="total"><span><b>Total</b> · {quantity} {quantity === 1 ? 'item' : 'items'}</span><strong>{formatPaise(total)}</strong></p>
         <Button disabled={busy || !connected || (!pending && (!canOrder || tableChanged || !draft.length || unavailable))}
-          onClick={() => void send()}><ChefHat aria-hidden="true" />{busy ? 'Saving…' : pending ? 'Retry submission' : served ? 'Save served order' : 'Send to kitchen'}</Button>
+          onClick={() => void send()}><ChefHat aria-hidden="true" />{busy ? 'Saving…' : pending ? 'Retry submission' : counter ? 'Save for payment' : served ? 'Save served order' : 'Send to kitchen'}</Button>
       </section>
     </div>
     <p className="sr-only" role="status">{quantity} {quantity === 1 ? 'item' : 'items'} in the order</p>

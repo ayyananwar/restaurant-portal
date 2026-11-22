@@ -126,7 +126,7 @@ export function ReceiptHandoff({ table, checkNumber, itemTotal, connected, onRef
   </div>;
 }
 
-function FeedbackSlip({ feedback }: { feedback: NonNullable<Table['receipts'][number]['feedback']> }) {
+export function FeedbackSlip({ feedback }: { feedback: NonNullable<Table['receipts'][number]['feedback']> }) {
   const slip = useRef<HTMLDivElement>(null);
   const expired = feedback.expiresAt <= Date.now();
   function print() {

@@ -1,5 +1,41 @@
 export const roles = ['admin', 'waiter', 'kitchen', 'billing'] as const;
 export type Role = typeof roles[number];
+export const serviceModes = ['table', 'counter', 'both'] as const;
+export type ServiceMode = typeof serviceModes[number];
+export interface OutletSettings { mode: ServiceMode; revision: number; changePolicy: 'approval' | 'blocked' }
+export interface CounterDraft extends OrderRequest {
+  fulfillment: 'dine-in' | 'takeaway';
+  customer: string;
+  seating: string;
+  paper: 'none' | 'live' | 'served';
+  paperReference: string;
+}
+export interface CounterPayment {
+  requestId: string;
+  revision: number;
+  reference: string;
+  officialTotalPaise: number;
+  paymentMethod: PaymentMethod;
+  coupon?: CouponQuote;
+}
+export interface CounterOrder {
+  id: number;
+  revision: number;
+  openedAt: number;
+  cashier: string;
+  fulfillment: CounterDraft['fulfillment'];
+  customer: string;
+  seating: string;
+  paper: CounterDraft['paper'];
+  paperReference: string;
+  token: string | null;
+  status: 'awaiting-payment' | 'preparing' | 'ready' | 'collected' | 'cancelled';
+  lines: OrderLine[];
+  receipts: CheckReceipt[];
+  totalPaise: number;
+  refund: { amountPaise: number; reference: string | null; reason: string } | null;
+  corrections: Array<{ id: number; reason: string; amountPaise: number; reference: string | null; item: string; quantity: number }>;
+}
 
 export const dishStatuses = ['queued', 'preparing', 'ready', 'cancelled'] as const;
 export type DishStatus = typeof dishStatuses[number];
@@ -175,6 +211,10 @@ export interface SplitRequest {
 }
 
 export interface ServiceState {
+  tableCancellations?: Array<{orderId:number;tableLabel:string}>;
+  resolutions?: Array<{orderId:number;tableLabel:string;amountPaise:number;reason:string;at:number;owner:string}>;
+  settings: OutletSettings;
+  counterOrders: CounterOrder[];
   sampleArtwork?: boolean;
   staff: Staff;
   menu: MenuItem[];
@@ -214,6 +254,10 @@ export interface WaiterActivityRow {
 }
 
 export interface WaiterActivityReport {
+  counter: Array<{
+    cashier: string; fulfillment: 'dine-in' | 'takeaway'; orders: number; itemTotalPaise: number;
+    officialTotalPaise: number; cancelled: number; refundNeededPaise: number; refundedPaise: number;
+  }>;
   period: ReportPeriod;
   anchorDate: string;
   startDate: string;
