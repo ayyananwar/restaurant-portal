@@ -160,6 +160,7 @@ export async function prepareHostedStore(pool: Pool) {
     ALTER TABLE online_pickup_channels ADD COLUMN IF NOT EXISTS pricing JSONB;
     ALTER TABLE online_pickup_requests ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 1;
     ALTER TABLE online_pickup_requests ADD COLUMN IF NOT EXISTS decision JSONB;
+    ALTER TABLE online_pickup_requests ADD COLUMN IF NOT EXISTS confirmation JSONB;
     ALTER TABLE online_pickup_requests DROP CONSTRAINT IF EXISTS online_pickup_requests_status_check;
     ALTER TABLE online_pickup_requests ADD CONSTRAINT online_pickup_requests_status_check
       CHECK(status IN ('pending_acceptance','awaiting_payment','rejected','expired','recovery_required'));

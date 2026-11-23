@@ -22,7 +22,7 @@ try {
   await pool.query('SELECT 1 FROM outlet_retired_offers, outlet_recoveries LIMIT 0');
   await pool.query('SELECT 1 FROM online_pickup_channels,online_pickup_quotes,online_pickup_requests LIMIT 0');
   await pool.query('SELECT pricing FROM online_pickup_channels LIMIT 0');
-  await pool.query('SELECT revision,decision FROM online_pickup_requests LIMIT 0');
+  await pool.query('SELECT revision,decision,confirmation FROM online_pickup_requests LIMIT 0');
   await pool.query('SELECT 1 FROM online_pickup_decisions LIMIT 0');
   if (accounts) await pool.query('SELECT 1 FROM guest_accounts, receipt_feedback, outlet_offer_snapshots, outlet_offer_claims LIMIT 0');
   const tls = key && cert ? { key: await readFile(key), cert: await readFile(cert) } : undefined;

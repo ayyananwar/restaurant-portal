@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { GuestMenuItem } from '../shared/contracts.js';
-import type { PickupAcceptance, PickupCart, PickupQuote, PickupRequest } from '../shared/online-ordering.js';
+import type { PickupAcceptance, PickupCart, PickupConfirmation, PickupQuote, PickupRequest } from '../shared/online-ordering.js';
 import { installationPattern, outletWrite, type PublicationLease } from './database.js';
 
 export class OnlineOrderingError extends Error {
@@ -92,11 +92,13 @@ export async function quotePickup(pool: Pool, slug: string, session: string, car
 
 export type RequestRow = { id: string; quote_id: string; installation: string; revision: string; status: PickupRequest['status'];
   created_at: Date; expires_at: Date; expired: boolean; snapshot: PickupQuote;
+  confirmation?: PickupConfirmation | null;
   decision: { acceptance?: PickupAcceptance; rejection?: { reason: string; at: number } } | null };
 export const requestView = (row: RequestRow): PickupRequest => ({ id: row.id, quote: row.snapshot, revision: Number(row.revision),
   status: ['pending_acceptance','awaiting_payment'].includes(row.status) && row.expired ? 'expired' : row.status,
   createdAt: row.created_at.getTime(), expiresAt: row.expires_at.getTime(),
   ...(row.decision?.acceptance ? { acceptance: row.decision.acceptance } : {}),
+  ...(row.confirmation ? { confirmation: row.confirmation } : {}),
   ...(row.decision?.rejection ? { rejection: row.decision.rejection } : {}) });
 
 export async function submitPickup(pool: Pool, slug: string, session: string, requestId: string, quoteId: string): Promise<PickupRequest> {
@@ -131,6 +133,42 @@ export async function readPickup(pool: Pool, slug: string, session: string, id: 
   const { rows } = await pool.query<RequestRow>('SELECT *,expires_at<=clock_timestamp() AS expired FROM online_pickup_requests WHERE id=$1 AND outlet=$2 AND account_id=$3', [id, slug, account]);
   if (!rows[0]) throw fail(404, 'Order request not found.');
   return requestView(rows[0]);
+}
+
+export async function confirmPickup(pool: Pool, slug: string, session: string, id: string, expectedRevision: number, reviewHash: string): Promise<PickupRequest> {
+  if (!uuid.test(id) || !Number.isSafeInteger(expectedRevision) || expectedRevision < 2 || !/^[a-f0-9]{64}$/.test(reviewHash)) {
+    throw fail(400, 'Review the restaurant total before confirming.');
+  }
+  return outletWrite(pool, slug, async client => {
+    const account = await accountFor(client, session);
+    const { rows } = await client.query<RequestRow>(`SELECT *,expires_at<=clock_timestamp() AS expired
+      FROM online_pickup_requests WHERE outlet=$1 AND account_id=$2 AND id=$3`, [slug, account, id]);
+    const row = rows[0];
+    if (!row) throw fail(404, 'Order request not found.');
+    if (row.confirmation) {
+      if (row.confirmation.reviewHash !== reviewHash || row.confirmation.acceptedRevision !== expectedRevision) {
+        throw fail(409, 'A different restaurant total was already confirmed. Refresh this request.');
+      }
+      // A replay reports the current state, including expiry/recovery. It never renews consent or payment time.
+      return requestView(row);
+    }
+    if (row.status !== 'awaiting_payment' || row.expired || Number(row.revision) !== expectedRevision
+      || row.decision?.acceptance?.review.hash !== reviewHash) throw fail(409, 'The request changed or expired. Review its current status.');
+    const channel = await availableChannel(client, slug);
+    if (channel.installation !== row.installation) throw fail(409, 'The restaurant needs to review this request again.');
+    const result = await client.query<RequestRow>(`WITH consent_time AS MATERIALIZED (SELECT clock_timestamp() AS at)
+      UPDATE online_pickup_requests SET revision=revision+1,
+      confirmation=jsonb_build_object('reviewHash',$4::text,'acceptedRevision',$5::bigint,
+        'confirmedAt',floor(extract(epoch FROM consent_time.at)*1000)::bigint) FROM consent_time
+      WHERE outlet=$1 AND account_id=$2 AND id=$3 AND revision=$5 AND status='awaiting_payment'
+        AND confirmation IS NULL AND expires_at>consent_time.at
+        AND EXISTS(SELECT 1 FROM online_pickup_channels c JOIN hosted_outlets o ON o.slug=c.outlet
+          WHERE c.outlet=$1 AND c.enabled AND o.online_pickup_entitled AND c.installation=$6
+            AND o.publication_installation=$6 AND c.heartbeat_at>consent_time.at-interval '45 seconds')
+      RETURNING online_pickup_requests.*,expires_at<=clock_timestamp() AS expired`, [slug, account, id, reviewHash, expectedRevision, row.installation]);
+    if (!result.rowCount) throw fail(409, 'The request expired or ordering became unavailable. Refresh its status.');
+    return requestView(result.rows[0]!);
+  });
 }
 
 // Recovery is account-scoped and remains available when the counter goes offline.

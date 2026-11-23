@@ -26,7 +26,10 @@ test('guest pickup cart recovers lost replies, isolates accounts and shows resta
   let app, browser;
   let loseReply = false;
   let unavailable = false;
+  let loseConfirmation = false;
+  let blockStatus = false;
   const submissions = [];
+  const confirmations = [];
   const accounts = [];
   try {
     await setup.query(`CREATE SCHEMA ${namespace}`); await prepareHostedStore(pool);
@@ -64,11 +67,16 @@ test('guest pickup cart recovers lost replies, isolates accounts and shows resta
       const request = route.request();
       const path = new URL(request.url()).pathname;
       if (unavailable && path.includes('/api/online-pickup/')) return route.abort('connectionfailed');
+      if (blockStatus && request.method() === 'GET' && /\/requests\/[a-f0-9-]+$/.test(path)) return route.abort('connectionfailed');
       const result = await app.inject({ method: request.method(), url: path + new URL(request.url()).search,
         headers: { ...await request.allHeaders(), host: 'cart.example.test' }, payload: request.postData() ?? undefined });
       if (path.endsWith('/requests') && request.method() === 'POST') {
         submissions.push(JSON.parse(request.postData()));
         if (loseReply && result.statusCode === 200) { loseReply = false; return route.abort('connectionfailed'); }
+      }
+      if (path.endsWith('/confirmation') && request.method() === 'PUT') {
+        confirmations.push(JSON.parse(request.postData()));
+        if (loseConfirmation && result.statusCode === 200) { loseConfirmation = false; return route.abort('connectionfailed'); }
       }
       await route.fulfill({ status: result.statusCode, headers: Object.fromEntries(Object.entries(result.headers).map(([key, value]) => [key, String(value)])), body: result.rawPayload });
     });
@@ -129,11 +137,36 @@ test('guest pickup cart recovers lost replies, isolates accounts and shows resta
     await page.evaluate(() => sessionStorage.clear()); await page.reload();
     await page.getByRole('heading', { name: 'Waiting for restaurant acceptance' }).waitFor();
     await syncPickupChannel(pool, 'cafe', 1, true, lease);
+    await syncPickupPricing(pool, 'cafe', { ...profile, revision: 2, taxMode: 'gst', stateCode: '27',
+      gstin: '27AAPFU0939F1ZV', classification: '996331', rateBasisPoints: 500, pricesIncludeTax: false }, lease);
     const review = await reviewPickup(pool, 'cafe', row.id, 1, lease);
     await decidePickup(pool, 'cafe', row.id, { requestId: randomUUID(), expectedRevision: 1, actor, decision: 'accept', reason: '', readyAt: Date.now() + 1_200_000, reviewHash: review.hash }, lease);
     await page.getByRole('heading', { name: 'Restaurant accepted · payment unavailable' }).waitFor();
     assert.equal(await page.getByRole('button', { name: /pay/i }).count(), 0);
     assert.match(await page.locator('.guest-pickup-status').innerText(), /130/);
+    const finalTotal = page.getByRole('region', { name: 'Restaurant final total' });
+    await finalTotal.getByText('CGST', { exact: true }).waitFor();
+    await finalTotal.getByText('SGST', { exact: true }).waitFor();
+    for (const width of [320, 390, 768, 1280]) {
+      await page.setViewportSize({ width, height: 844 });
+      await finalTotal.scrollIntoViewIfNeeded();
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+      await page.evaluate(axe.source);
+      assert.deepEqual(await page.evaluate(async () => (await window.axe.run({ runOnly: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'] })).violations.map(issue => issue.id)), []);
+      if (process.env.RESTAURANT_TEST_SCREENSHOTS && [390, 1280].includes(width)) await page.screenshot({ fullPage: true, path: join(process.env.RESTAURANT_TEST_SCREENSHOTS, `guest-final-total-${width}.png`) });
+    }
+    // A committed confirmation with a lost reply can be retried without renewing its time or price.
+    await syncPickupChannel(pool, 'cafe', 1, true, lease);
+    loseConfirmation = true; blockStatus = true;
+    await page.getByRole('button', { name: 'Confirm total of ₹136.50', exact: true }).click();
+    await page.getByRole('alert').filter({ hasText: /Confirmation could not be checked/ }).waitFor();
+    await page.getByRole('button', { name: 'Confirm total of ₹136.50', exact: true }).click();
+    await page.getByText(/You confirmed this total at/).waitFor();
+    blockStatus = false;
+    assert.equal(confirmations.length, 2); assert.deepEqual(confirmations[0], confirmations[1]);
+    assert.equal((await pool.query('SELECT revision::int FROM online_pickup_requests WHERE id=$1', [row.id])).rows[0].revision, 3);
+    await page.reload(); await page.getByText(/You confirmed this total at/).waitFor();
+    assert.equal(await page.getByRole('button', { name: /^Confirm total/ }).count(), 0);
     unavailable = true;
     await page.getByRole('alert').filter({ hasText: /Check your connection/ }).waitFor();
     await page.getByRole('heading', { name: 'Restaurant accepted · payment unavailable' }).waitFor();

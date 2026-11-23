@@ -35,6 +35,7 @@ test('Windows connector survives lost acknowledgments and restarts; counter UI d
   const accountOptions={origin:remoteOrigin,phoneKey:randomBytes(32),verifier:{}};
   const sessions={};
   const actors={};
+  const guestSessions=new Map();
   async function send(url,init={}) {
     calls++;
     assert.equal(new URL(url).origin,remoteOrigin);
@@ -60,7 +61,7 @@ test('Windows connector survives lost acknowledgments and restarts; counter UI d
     const quote=await call('/quote',{name,notes:'Call at collection',lines:[{menuId:1,quantity:2,note:'Less sugar'}]});
     assert.equal(quote.statusCode,200,quote.body);
     const order=await call('/requests',{requestId:randomUUID(),quoteId:quote.json().id});
-    assert.equal(order.statusCode,200,order.body);return order.json();
+    assert.equal(order.statusCode,200,order.body);guestSessions.set(order.json().id,cookie);return order.json();
   }
   try {
     await setup.query(`CREATE SCHEMA ${namespace}`);await prepareHostedStore(pool);
@@ -155,6 +156,13 @@ test('Windows connector survives lost acknowledgments and restarts; counter UI d
     assert.equal(db.prepare("SELECT state FROM online_decisions WHERE order_id=? ORDER BY created_at DESC LIMIT 1").get(third.id).state,'queued');
     await connector.refresh();
     await page.getByRole('region',{name:'Online request for Browser customer'}).getByText('Waiting for customer payment',{exact:true}).waitFor();
+    const accepted=(await pool.query('SELECT revision::int,decision FROM online_pickup_requests WHERE id=$1',[third.id])).rows[0];
+    const consent=await hosted.inject({method:'PUT',url:`/api/online-pickup/cafe/requests/${third.id}/confirmation`,
+      headers:{host:'connector.example.test',origin:remoteOrigin,cookie:`__Host-guest_session=${guestSessions.get(third.id)}`},
+      payload:{expectedRevision:accepted.revision,reviewHash:accepted.decision.acceptance.review.hash}});
+    assert.equal(consent.statusCode,200,consent.body);await connector.refresh();
+    assert.equal(onlineInbox(db,target).orders.find(order=>order.id===third.id).confirmation.reviewHash,accepted.decision.acceptance.review.hash);
+    await page.getByText('Customer confirmed the total. Payment is still required; do not start preparation.').waitFor();
     const fourth=await guestOrder('Reject browser customer');await connector.refresh();
     await page.getByRole('button',{name:/^Reject browser customer/}).click();
     await page.getByRole('button',{name:'Reject request',exact:true}).click();

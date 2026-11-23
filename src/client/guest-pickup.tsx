@@ -3,12 +3,12 @@ import type { GuestMenuItem } from '../shared/contracts.js';
 import type { PickupCart, PickupQuote, PickupRequest } from '../shared/online-ordering.js';
 import { api, RequestError } from './api.js';
 import { formatPaise } from './money.js';
+import { GuestPickupAcceptance } from './guest-pickup-acceptance.js';
 
 export const emptyPickupCart = (): PickupCart => ({ name: '', notes: '', lines: [] });
 type Availability = { preview: boolean; available: boolean; payments: false };
 type Attempt = { requestId: string; quoteId: string };
 const uuid = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/;
-const time = (value: number) => new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit' }).format(value);
 
 export function GuestPickup({ outlet, account, items, cart, setCart, onAvailable, onLocked, onRefreshMenu, onVisible }: {
   outlet: string; account: string | null; items: GuestMenuItem[]; cart: PickupCart;
@@ -88,7 +88,7 @@ export function GuestPickup({ outlet, account, items, cart, setCart, onAvailable
       if (document.hidden || polling) return;
       polling = true;
       void api<PickupRequest>(`${path}/requests/${order.id}`).then(result => {
-        if (current) { setOrder(result); setError(''); }
+        if (current) { setOrder(previous => previous && previous.revision > result.revision ? previous : result); setError(''); }
       }).catch(failure => { if (current) setError(message(failure)); }).finally(() => { polling = false; });
     }, 5_000);
     return () => { current = false; window.clearInterval(timer); };
@@ -136,11 +136,7 @@ export function GuestPickup({ outlet, account, items, cart, setCart, onAvailable
       <ul>{order.quote.lines.map(line => <li key={line.menuId}>{line.quantity} × {line.name}{line.note && <p>{line.note}</p>}</li>)}</ul>
       {order.quote.notes && <p>{order.quote.notes}</p>}
       <p>Original item estimate: <strong>{formatPaise(order.quote.subtotalPaise)}</strong></p>
-      {order.acceptance && <>
-        <p>Restaurant-reviewed total: <strong>{formatPaise(order.acceptance.review.amounts.totalPaise)}</strong></p>
-        <p>Pickup estimate: {time(order.acceptance.readyAt)} IST</p>
-        <p>Payment window ends at {time(order.acceptance.paymentExpiresAt)} IST. This test request will expire without payment.</p>
-      </>}
+      {order.acceptance && <GuestPickupAcceptance key={order.id} outlet={outlet} order={order} onUpdate={setOrder} />}
       {order.rejection && <p>{order.rejection.reason}</p>}
       {order.status === 'recovery_required' && <p>Contact the restaurant. Do not place another request until this is resolved.</p>}
       {!active && <button type="button" onClick={() => { setOrder(null); setCart(emptyPickupCart()); setReview(undefined); heading.current?.focus(); }}>Start a new pickup order</button>}

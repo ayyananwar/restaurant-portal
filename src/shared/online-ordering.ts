@@ -21,6 +21,7 @@ export interface PickupRequest {
   expiresAt: number;
   quote: PickupQuote;
   acceptance?: PickupAcceptance;
+  confirmation?: PickupConfirmation;
   rejection?: { reason: string; at: number };
 }
 import type { BillingProfile, BillSnapshot, Staff } from './contracts.js';
@@ -43,6 +44,11 @@ export interface PickupAcceptance {
   readyAt: number;
   acceptedAt: number;
   paymentExpiresAt: number;
+}
+export interface PickupConfirmation {
+  reviewHash: string;
+  acceptedRevision: number;
+  confirmedAt: number;
 }
 export interface PickupDecision {
   requestId: string;
@@ -100,5 +106,12 @@ export function validPickupRequest(value:unknown):value is PickupRequest {
   if(value.acceptance!==undefined&&(!record(value.acceptance)||!validPickupReview(value.acceptance.review)||value.acceptance.review.orderId!==value.id||!stamp(value.acceptance.readyAt)||
     !stamp(value.acceptance.acceptedAt)||!stamp(value.acceptance.paymentExpiresAt)))return false;
   if(value.rejection!==undefined&&(!record(value.rejection)||typeof value.rejection.reason!=='string'||value.rejection.reason.length>500||!stamp(value.rejection.at)))return false;
+  if(value.confirmation!==undefined&&(!['awaiting_payment','expired','recovery_required'].includes(String(value.status))||
+    !record(value.confirmation)||!record(value.acceptance)||!record(value.acceptance.review)||
+    value.confirmation.reviewHash!==value.acceptance.review.hash||!stamp(value.confirmation.confirmedAt)||
+    !Number.isSafeInteger(value.confirmation.acceptedRevision)||Number(value.confirmation.acceptedRevision)<2||
+    Number(value.confirmation.acceptedRevision)>=Number(value.revision)||
+    value.confirmation.acceptedRevision!==Number(value.acceptance.review.revision)+1||
+    Number(value.confirmation.confirmedAt)<Number(value.acceptance.acceptedAt)||Number(value.confirmation.confirmedAt)>=Number(value.acceptance.paymentExpiresAt)))return false;
   return (value.status!=='awaiting_payment'||value.acceptance!==undefined)&&(value.status!=='rejected'||value.rejection!==undefined);
 }

@@ -4,7 +4,7 @@ import type { Pool } from 'pg';
 import type { GuestAccountOptions } from './phone-verify.js';
 import { outletSlugPattern } from './database.js';
 import { claimOffer, readGuestOffers } from './offers.js';
-import { activePickup, pickupPreviewAvailable, quotePickup, readPickup, submitPickup } from './online-ordering.js';
+import { activePickup, confirmPickup, pickupPreviewAvailable, quotePickup, readPickup, submitPickup } from './online-ordering.js';
 import type { PickupCart } from '../shared/online-ordering.js';
 
 const cookie = '__Host-guest_session';
@@ -128,6 +128,18 @@ export function addGuestAccountRoutes(app: FastifyInstance, pool: Pool, options?
   }, async (request, reply) => {
     if (request.headers.host !== host) return fail(reply, 403, 'Open the guest menu and try again.');
     return readPickup(pool, request.params.slug, sessionHash(request), request.params.id);
+  });
+  app.put<{ Params: { slug: string; id: string }; Body: { expectedRevision: number; reviewHash: string } }>('/api/online-pickup/:slug/requests/:id/confirmation', {
+    onRequest: allowWrite, bodyLimit: 512, schema: {
+      params: body({ slug: { type: 'string', pattern: outletSlugPattern }, id: uuid }),
+      body: body({ expectedRevision: { type: 'integer', minimum: 2, maximum: Number.MAX_SAFE_INTEGER }, reviewHash: { type: 'string', pattern: '^[a-f0-9]{64}$' } })
+    }
+  }, async (request, reply) => {
+    const token = sessionHash(request);
+    const id = await accountId(token);
+    if (!id) return fail(reply, 401, 'Sign in with your phone to confirm the total.');
+    if (!(await useLimit(pool, `pickup-confirm:${id}`, 60, 900))) return fail(reply, 429, 'Too many confirmations. Check your request before retrying.');
+    return confirmPickup(pool, request.params.slug, token, request.params.id, request.body.expectedRevision, request.body.reviewHash);
   });
   app.get<{ Params: { slug: string } }>('/api/guest-offers/:slug', { schema: { params: outletParams } }, (request, reply) => {
     if (request.headers.host !== host) return fail(reply, 403, 'Open the guest menu and try again.');

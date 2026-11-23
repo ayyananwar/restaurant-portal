@@ -143,3 +143,6 @@ a { color: inherit; }
 .guest-page[data-pickup-cart="true"] { padding-bottom: calc(5rem + env(safe-area-inset-bottom)); }
 .guest-cart-shortcut { position: fixed; z-index: 5; bottom: calc(1rem + env(safe-area-inset-bottom)); right: max(1rem, calc((100vw - 67rem) / 2)); max-width: calc(100% - 2rem); padding: .75rem 1rem; border-radius: .55rem; background: var(--navy); color: var(--surface); font-weight: 700; text-align: center; text-decoration: none; box-shadow: 0 4px 16px #0b192a26; }
 .guest-cart-shortcut:hover { background: #20364a; }
+.guest-pickup-amounts { display: grid; gap: .35rem; margin: 0; max-width: 42rem; }
+.guest-pickup-amounts > div { display: flex; justify-content: space-between; gap: 1rem; }
+.guest-pickup-amounts dd { margin: 0; font-variant-numeric: tabular-nums; }

@@ -66,6 +66,7 @@ export function OnlineOrders({connected,owner,onClose}:{connected:boolean;owner:
           {order.quote.notes&&<p>Order note: {order.quote.notes}</p>}
           <p><strong>Customer item estimate: {formatPaise(order.quote.subtotalPaise)}</strong></p>
           {order.acceptance&&<><OnlineTotal review={order.acceptance.review}/><p>Promised pickup: {formatPublicationTime(new Date(order.acceptance.readyAt).toISOString())} IST</p></>}
+          {order.confirmation&&<p>Customer confirmed the total. Payment is still required; do not start preparation.</p>}
           {order.rejection&&<p>Rejection reason: {order.rejection.reason}</p>}
           {order.decision?.state==='queued'&&<p role="status" className="note">Decision saved on this PC. Waiting for hosted confirmation; do not start preparation.</p>}
           {order.decision?.state==='conflict'&&<p role="alert" className="error">{order.decision.error??'The decision needs review. Refresh the request before trying again.'}</p>}
