@@ -432,7 +432,7 @@ test('PostgreSQL hosted menu, HTTPS publication and guest browser flow', { timeo
     await page.getByLabel('Verification code').fill('519247');
     const [verified] = await Promise.all([page.waitForResponse(response => response.url().endsWith('/guest-account/verify')),
       page.getByRole('button', { name: 'Verify and sign in' }).click()]);
-    assert.deepEqual(await verified.json(), { account: { phoneLast4: '1111' } });
+    assert.deepEqual(await verified.json(), { account: { id: (await pool.query('SELECT id FROM guest_accounts')).rows[0].id, phoneLast4: '1111' } });
     const cookie = (await verified.headerValue('set-cookie')).split(';')[0];
     assert.match(await verified.headerValue('set-cookie'), /__Host-guest_session=.*Path=\/; Secure; HttpOnly; SameSite=Lax/);
     assert.equal((await guestAccount('verify', { challenge, code: '519247' })).status, 422);

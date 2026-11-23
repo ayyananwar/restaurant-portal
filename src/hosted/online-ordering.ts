@@ -132,3 +132,21 @@ export async function readPickup(pool: Pool, slug: string, session: string, id: 
   if (!rows[0]) throw fail(404, 'Order request not found.');
   return requestView(rows[0]);
 }
+
+// Recovery is account-scoped and remains available when the counter goes offline.
+export async function activePickup(pool: Pool, slug: string, session: string): Promise<PickupRequest | null> {
+  const account = await accountFor(pool, session);
+  const { rows } = await pool.query<RequestRow>(`SELECT *,expires_at<=clock_timestamp() AS expired
+    FROM online_pickup_requests WHERE outlet=$1 AND account_id=$2
+      AND (status='recovery_required' OR (status IN ('pending_acceptance','awaiting_payment') AND expires_at>clock_timestamp()))
+    ORDER BY created_at DESC LIMIT 1`, [slug, account]);
+  return rows[0] ? requestView(rows[0]) : null;
+}
+
+export async function pickupPreviewAvailable(pool: Pool, slug: string): Promise<boolean> {
+  const result = await pool.query(`SELECT 1 FROM online_pickup_channels c JOIN hosted_outlets o ON o.slug=c.outlet
+    WHERE c.outlet=$1 AND c.enabled AND o.online_pickup_entitled AND c.installation=o.publication_installation
+      AND o.published_at IS NOT NULL AND c.heartbeat_at>clock_timestamp()-interval '45 seconds'
+      AND c.pricing->>'testMode'='true' AND c.pricing->>'enabled'='true'`, [slug]);
+  return Boolean(result.rowCount);
+}

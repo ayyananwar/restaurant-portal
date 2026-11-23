@@ -54,7 +54,7 @@ async function guestAssets() {
   return assets;
 }
 
-export async function buildHostedApp(pool: Pool, tls?: { key: Buffer; cert: Buffer }, accounts?: GuestAccountOptions) {
+export async function buildHostedApp(pool: Pool, tls?: { key: Buffer; cert: Buffer }, accounts?: GuestAccountOptions, features: { pickupPreview?: boolean } = {}) {
   const [html, assets] = await Promise.all([readFile(new URL(guestFile, clientDir)), guestAssets()]);
   const app = Fastify({
     ...(tls ? { https: tls } : {}), requestTimeout: 15_000, bodyLimit: 6 * 1024 * 1024,
@@ -73,7 +73,7 @@ export async function buildHostedApp(pool: Pool, tls?: { key: Buffer; cert: Buff
     return reply.code(status).send({ error: error instanceof OnlineOrderingError ? error.message
       : status >= 500 ? 'The menu service is temporarily unavailable.' : 'The request could not be accepted.' });
   });
-  addGuestAccountRoutes(app, pool, accounts);
+  addGuestAccountRoutes(app, pool, accounts, features.pickupPreview === true);
 
   const publish = (contentType?: string) => async (request: FastifyRequest<{ Params: Outlet }>, reply: FastifyReply) => {
     if (!(await authenticateOutlet(pool, request.params.slug, request.headers.authorization, request.headers['x-outlet-installation']))) {

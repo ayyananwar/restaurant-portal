@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ConciergeBell, Coffee, CookingPot, Cupcake, Search, Soup, Utensils, X } from 'lucide-react';
 import { menuPhotoPath, type GuestMenu as GuestMenuData, type GuestMenuItem } from '../shared/contracts.js';
@@ -6,6 +6,7 @@ import { api, RequestError } from './api.js';
 import { availabilityCaption, filterMenu, formatPublicationTime, groupMenu } from './menu-display.js';
 import { formatPaise } from './money.js';
 import { GuestAccount } from './guest-account.js';
+import { emptyPickupCart, GuestPickup } from './guest-pickup.js';
 import { sampleDishPhoto } from './sample-dish-photos.js';
 import './guest-menu.css';
 
@@ -28,6 +29,15 @@ function GuestMenu() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const [account, setAccount] = useState<string | null>(null);
+  const [cart, setCart] = useState(emptyPickupCart);
+  const [pickupAvailable, setPickupAvailable] = useState(false);
+  const [pickupLocked, setPickupLocked] = useState(true);
+  const [cartVisible, setCartVisible] = useState(true);
+  const accountChanged = useCallback((id: string | null) => {
+    setAccount(id); setCart(emptyPickupCart()); setPickupLocked(true);
+  }, []);
+  const refreshMenu = useCallback(() => { setError(null); setLoadAttempt(value => value + 1); }, []);
   const searchButton = useRef<HTMLButtonElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
   const items = menu?.items;
@@ -69,7 +79,8 @@ function GuestMenu() {
     searchButton.current?.focus();
   }
 
-  return <div className="guest-page">
+  const cartCount = cart.lines.reduce((sum, line) => sum + line.quantity, 0);
+  return <div className="guest-page" data-pickup-cart={cartCount > 0 && !pickupLocked}>
     <a className="guest-skip" href="#guest-content">Skip to menu</a>
     <header className="guest-header">
       <div className="guest-topbar">
@@ -110,7 +121,11 @@ function GuestMenu() {
             onClick={() => setActiveCategory(id)}><Icon aria-hidden="true" /><span>{name}</span></a>;
         })}
       </nav>}
-      {outlet && menu && <GuestAccount outlet={outlet} />}
+      {outlet && menu && <>
+        <GuestAccount outlet={outlet} onAccountChange={accountChanged} />
+        <GuestPickup key={account ?? 'signed-out'} outlet={outlet} account={account} items={menu.items}
+          cart={cart} setCart={setCart} onAvailable={setPickupAvailable} onLocked={setPickupLocked} onRefreshMenu={refreshMenu} onVisible={setCartVisible} />
+      </>}
       {error && <div className="guest-message" role="alert">
         <p>{error === 'unpublished' ? 'This menu is unavailable. Ask the restaurant for its current menu.'
           : 'The menu couldn’t load. Check your connection and try again.'}</p>
@@ -127,13 +142,24 @@ function GuestMenu() {
           <h2 id={sectionIds.get(name)} tabIndex={-1}>{name}</h2>
           <p>{dishes.length} {dishes.length === 1 ? 'item' : 'items'}</p>
         </div>
-        <ul className="guest-dishes" role="list">{dishes.map(item => <GuestDish key={item.id} item={item} now={now} sample={menu?.sampleArtwork} />)}</ul>
+        <ul className="guest-dishes" role="list">{dishes.map(item => <GuestDish key={item.id} item={item} now={now} sample={menu?.sampleArtwork}
+          add={pickupAvailable ? () => setCart(previous => {
+            const line = previous.lines.find(line => line.menuId === item.id);
+            if (!item.available || pickupLocked || previous.lines.reduce((sum, line) => sum + line.quantity, 0) >= 100
+              || (line ? line.quantity >= 20 : previous.lines.length >= 50)) return previous;
+            return { ...previous, lines: line ? previous.lines.map(saved => saved.menuId === item.id ? { ...saved, quantity: saved.quantity + 1 } : saved)
+              : [...previous.lines, { menuId: item.id, quantity: 1, note: '' }] };
+          }) : undefined} addDisabled={pickupLocked || !account || (cart.lines.find(line => line.menuId === item.id)?.quantity ?? 0) >= 20
+            || cart.lines.reduce((sum, line) => sum + line.quantity, 0) >= 100 || (!cart.lines.some(line => line.menuId === item.id) && cart.lines.length >= 50)} />)}</ul>
       </section>)}
     </main>
+    {outlet && account && cartCount > 0 && !pickupLocked && !cartVisible && <a className="guest-cart-shortcut" href="#pickup-heading">
+      Review pickup cart · {cartCount} {cartCount === 1 ? 'item' : 'items'}
+    </a>}
   </div>;
 }
 
-function GuestDish({ item, now, sample }: { item: GuestMenuItem; now: number; sample?: boolean }) {
+function GuestDish({ item, now, sample, add, addDisabled }: { item: GuestMenuItem; now: number; sample?: boolean; add?: () => void; addDisabled?: boolean }) {
   const [failedKey, setFailedKey] = useState<string | null>(null);
   const caption = availabilityCaption(item, now);
   const photo = item.photoKey
@@ -151,6 +177,7 @@ function GuestDish({ item, now, sample }: { item: GuestMenuItem; now: number; sa
       <div className="guest-dish-meta">
         <strong>{formatPaise(item.pricePaise)}</strong>
         <span className="guest-availability" data-available={item.available}>{item.available ? 'Available' : 'Sold out'}</span>
+        {add && <button className="guest-add" type="button" disabled={!item.available || addDisabled} aria-label={`Add for pickup: ${item.name}`} onClick={add}>Add for pickup</button>}
       </div>
     </div>
   </li>;

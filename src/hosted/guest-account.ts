@@ -4,7 +4,7 @@ import type { Pool } from 'pg';
 import type { GuestAccountOptions } from './phone-verify.js';
 import { outletSlugPattern } from './database.js';
 import { claimOffer, readGuestOffers } from './offers.js';
-import { quotePickup, readPickup, submitPickup } from './online-ordering.js';
+import { activePickup, pickupPreviewAvailable, quotePickup, readPickup, submitPickup } from './online-ordering.js';
 import type { PickupCart } from '../shared/online-ordering.js';
 
 const cookie = '__Host-guest_session';
@@ -60,7 +60,7 @@ async function useLimit(db: Pick<Pool, 'query'>, key: string, maximum: number, s
   return Boolean(result.rowCount);
 }
 
-export function addGuestAccountRoutes(app: FastifyInstance, pool: Pool, options?: GuestAccountOptions) {
+export function addGuestAccountRoutes(app: FastifyInstance, pool: Pool, options?: GuestAccountOptions, pickupPreview = false) {
   if (!options) {
     app.get('/api/guest-account', () => ({ available: false, account: null }));
     return;
@@ -87,6 +87,18 @@ export function addGuestAccountRoutes(app: FastifyInstance, pool: Pool, options?
 
   const outletParams = body({ slug: { type: 'string', pattern: outletSlugPattern } });
   const uuid = { type: 'string', pattern: '^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$' };
+  app.get<{ Params: { slug: string } }>('/api/online-pickup/:slug/availability', {
+    schema: { params: outletParams }
+  }, async (request, reply) => {
+    if (request.headers.host !== host) return fail(reply, 403, 'Open the guest menu and try again.');
+    return { preview: pickupPreview, available: pickupPreview && await pickupPreviewAvailable(pool, request.params.slug), payments: false };
+  });
+  app.get<{ Params: { slug: string } }>('/api/online-pickup/:slug/active', {
+    schema: { params: outletParams }
+  }, async (request, reply) => {
+    if (request.headers.host !== host) return fail(reply, 403, 'Open the guest menu and try again.');
+    return { order: await activePickup(pool, request.params.slug, sessionHash(request)) };
+  });
   app.post<{ Params: { slug: string }; Body: PickupCart }>('/api/online-pickup/:slug/quote', {
     onRequest: allowWrite, bodyLimit: 65_536, schema: { params: outletParams, body: body({
       name: { type: 'string', minLength: 1, maxLength: 100 }, notes: { type: 'string', maxLength: 500 },
@@ -140,8 +152,8 @@ export function addGuestAccountRoutes(app: FastifyInstance, pool: Pool, options?
     if (request.headers.host !== host) return fail(reply, 403, 'Open the guest menu and try again.');
     const token = sessionHash(request);
     if (!token) return { available: true, account: null };
-    const { rows } = await pool.query<{ phoneLast4: string }>(`
-      SELECT a.phone_last_four AS "phoneLast4" FROM guest_sessions s JOIN guest_accounts a ON a.id = s.account_id
+    const { rows } = await pool.query<{ id: string; phoneLast4: string }>(`
+      SELECT a.id,a.phone_last_four AS "phoneLast4" FROM guest_sessions s JOIN guest_accounts a ON a.id = s.account_id
       WHERE s.token_hash = $1 AND s.expires_at > now()
     `, [token]);
     return { available: true, account: rows[0] ?? null };
@@ -197,7 +209,7 @@ export function addGuestAccountRoutes(app: FastifyInstance, pool: Pool, options?
     }
     if (!approved) return invalid();
     const token = opaqueToken();
-    const saved = await pool.query<{ phoneLast4: string }>(`
+    const saved = await pool.query<{ id: string; phoneLast4: string }>(`
       WITH verified AS (
         DELETE FROM guest_phone_challenges WHERE id = $1 AND expires_at > now()
         RETURNING phone_key, phone_last_four
@@ -213,7 +225,7 @@ export function addGuestAccountRoutes(app: FastifyInstance, pool: Pool, options?
         SELECT $3, id, now() + make_interval(secs => $4) FROM account
         RETURNING account_id
       )
-      SELECT phone_last_four AS "phoneLast4" FROM account JOIN new_session ON new_session.account_id = account.id
+      SELECT account.id,phone_last_four AS "phoneLast4" FROM account JOIN new_session ON new_session.account_id = account.id
     `, [challenge, randomUUID(), sha(token), sessionSeconds, sessionHash(request)]);
     const account = saved.rows[0];
     if (!account) return invalid();

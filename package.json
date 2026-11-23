@@ -14,7 +14,7 @@
     "test:browser": "node scripts/browser-check.js",
     "test:billing-browser": "node scripts/billing-browser-check.js",
     "test:recovery": "node --test scripts/recovery-check.js",
-    "test:hosted": "node --test --test-concurrency=1 scripts/hosted-check.js scripts/online-order-check.js scripts/pickup-acceptance-check.js scripts/online-connector-check.js",
+    "test:hosted": "node --test --test-concurrency=1 scripts/hosted-check.js scripts/online-order-check.js scripts/pickup-acceptance-check.js scripts/online-connector-check.js scripts/guest-pickup-check.js",
     "test:windows": "node --test scripts/windows-check.js",
     "check:staging": "node scripts/staging-check.js",
     "test:all": "npm run test && npm run test:startup && npm run test:browser && npm run test:billing-browser && npm run test:recovery",

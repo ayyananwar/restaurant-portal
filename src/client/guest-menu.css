@@ -122,3 +122,24 @@ a { color: inherit; }
   .guest-search + .guest-categories { margin-top: 0; }
   .guest-categories a { min-height: 4.7rem; }
 }
+/* Pickup extends the existing guest palette and controls; it is not a staff workspace. */
+.guest-pickup { border-block: 1px solid var(--rule); margin-block: 1rem; padding-block: 1rem; overflow-wrap: anywhere; }
+.guest-pickup h2 { margin-bottom: .5rem; }
+.guest-pickup h3 { font: 700 1.12rem/1.3 var(--display); }
+.guest-pickup-notice { color: var(--accent); margin-bottom: .75rem; }
+.guest-pickup-form { display: grid; gap: .75rem; max-width: 42rem; margin-top: .75rem; }
+.guest-pickup fieldset { display: grid; gap: .5rem; border: 0; padding: 0; margin: 0; min-width: 0; }
+.guest-pickup legend { font-weight: 700; padding: 0; }
+.guest-pickup-lines { list-style: none; padding: 0; }
+.guest-pickup-lines li { display: grid; gap: .5rem; padding-block: .75rem; border-bottom: 1px solid var(--rule); }
+.guest-pickup-lines select { width: auto; }
+.guest-pickup-status, .guest-pickup-review { display: grid; gap: .5rem; margin-block: .75rem; }
+.guest-pickup-status ul, .guest-pickup-review ul { padding-inline-start: 1.25rem; }
+.guest-pickup strong { font-variant-numeric: tabular-nums; }
+.guest-add { min-height: 44px; border: 1px solid var(--navy); padding: .4rem .7rem; border-radius: .55rem; font: 650 .9rem/1.4 "Segoe UI", system-ui, sans-serif; background: var(--navy); color: var(--surface); cursor: pointer; }
+.guest-add:enabled:hover { background: #20364a; }
+.guest-add:disabled, .guest-pickup button:disabled { opacity: .65; cursor: default; }
+.guest-pickup textarea { resize: vertical; }
+.guest-page[data-pickup-cart="true"] { padding-bottom: calc(5rem + env(safe-area-inset-bottom)); }
+.guest-cart-shortcut { position: fixed; z-index: 5; bottom: calc(1rem + env(safe-area-inset-bottom)); right: max(1rem, calc((100vw - 67rem) / 2)); max-width: calc(100% - 2rem); padding: .75rem 1rem; border-radius: .55rem; background: var(--navy); color: var(--surface); font-weight: 700; text-align: center; text-decoration: none; box-shadow: 0 4px 16px #0b192a26; }
+.guest-cart-shortcut:hover { background: #20364a; }

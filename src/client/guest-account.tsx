@@ -3,10 +3,10 @@ import { api, RequestError } from './api.js';
 import { GuestFeedback } from './guest-feedback.js';
 import { GuestOffers } from './guest-offers.js';
 
-type Account = { phoneLast4: string };
+type Account = { id: string; phoneLast4: string };
 type AccountStatus = { available: boolean; account: Account | null };
 
-export function GuestAccount({ outlet }: { outlet: string }) {
+export function GuestAccount({ outlet, onAccountChange }: { outlet: string; onAccountChange?: (id: string | null) => void }) {
   const [status, setStatus] = useState<AccountStatus>();
   const [open, setOpen] = useState(false);
   const [phone, setPhone] = useState('');
@@ -20,6 +20,7 @@ export function GuestAccount({ outlet }: { outlet: string }) {
     return () => { current = false; };
   }, []);
   useEffect(() => { if (open) input.current?.focus(); }, [open, challenge]);
+  useEffect(() => { onAccountChange?.(status?.account?.id ?? null); }, [status?.account?.id, onAccountChange]);
 
   async function run(action: () => Promise<void>) {
     if (busy) return;

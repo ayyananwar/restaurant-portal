@@ -26,7 +26,7 @@ try {
   await pool.query('SELECT 1 FROM online_pickup_decisions LIMIT 0');
   if (accounts) await pool.query('SELECT 1 FROM guest_accounts, receipt_feedback, outlet_offer_snapshots, outlet_offer_claims LIMIT 0');
   const tls = key && cert ? { key: await readFile(key), cert: await readFile(cert) } : undefined;
-  const app = await buildHostedApp(pool, tls, accounts);
+  const app = await buildHostedApp(pool, tls, accounts, { pickupPreview: process.env.HOSTED_PICKUP_PREVIEW === '1' });
   app.addHook('onClose', async () => pool.end());
   await app.listen({ host, port });
   console.log(`Hosted menu is running on ${tls ? 'https' : 'http'}://${host}:${port}`);
